@@ -47,13 +47,14 @@ async function build() {
     const origWidth = meta.width || 2000
 
     const widths = [400, 800, 1200]
+    const qualityFor = (w) => (w <= 400 ? 40 : w <= 800 ? 38 : 35)
     const urls = {}
     for (const w of widths) {
       const target = Math.min(origWidth, w)
       const outPath = path.join(outDirForFile, `${baseName}-${w}.webp`)
       await sharp(buffer)
         .resize({ width: target, withoutEnlargement: true })
-        .webp({ quality: 50, effort: 5 })
+        .webp({ quality: qualityFor(w), effort: 5 })
         .toFile(outPath)
       urls[w] = `/thumbs/${baseName}-${w}.webp`
     }
