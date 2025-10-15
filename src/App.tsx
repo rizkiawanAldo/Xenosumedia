@@ -104,9 +104,9 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
 
-  // Simplified: Just load all images with default aspect ratios for now
+  // Load images with default aspect ratios immediately, then calculate real ones
   useEffect(() => {
-    // Load all images with default aspect ratios immediately
+    // Set default aspect ratios immediately so gallery shows up
     const defaultItems: JustifiedItem[] = items.map((it, i) => ({
       ...it,
       aspectRatio: 1.5, // Default aspect ratio
@@ -114,7 +114,62 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
     } as JustifiedItem & { __globalIndex?: number }))
     
     setWithRatios(defaultItems)
-  }, [items])
+
+    // Then calculate real aspect ratios in the background
+    let cancelled = false
+    ;(async () => {
+      const enriched: JustifiedItem[] = new Array(items.length)
+      
+      // Load aspect ratios with moderate concurrency
+      const concurrency = 8
+      const queue: Promise<void>[] = []
+      let nextIndex = 0
+
+      async function worker() {
+        while (true) {
+          const i = nextIndex++
+          if (i >= items.length) break
+          const it = items[i]
+          
+          // Use thumbnail for aspect ratio calculation if available
+          const thumb = findThumbnail(it.src, thumbsByOriginal)
+          const srcForAspect = thumb || it.src
+          
+          try {
+            const ratio = await loadImageAspect(srcForAspect)
+            // Use actual aspect ratio without randomization
+            const aspectRatio = Math.max(0.3, Math.min(3.5, ratio))
+            const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
+            ;(e as any).__globalIndex = i
+            enriched[i] = e
+            
+            // Update state progressively for first few images to show improvement
+            if (i < 15 && !cancelled) {
+              const currentItems = [...defaultItems]
+              for (let j = 0; j <= i; j++) {
+                if (enriched[j]) {
+                  currentItems[j] = enriched[j]
+                }
+              }
+              setWithRatios(currentItems)
+            }
+          } catch (error) {
+            // Keep default aspect ratio if loading fails
+            enriched[i] = defaultItems[i]
+          }
+        }
+      }
+      
+      for (let c = 0; c < concurrency; c++) queue.push(worker())
+      await Promise.all(queue)
+      
+      if (!cancelled) {
+        setWithRatios(enriched)
+      }
+    })()
+    
+    return () => { cancelled = true }
+  }, [items, thumbsByOriginal])
 
   const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
   const rows = useMemo(() => computeRows(withRatios, width, gap, baseRowHeight), [withRatios, width, gap, baseRowHeight])
@@ -132,6 +187,11 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
             // Use thumbnail if available, fallback to original
             const thumb = findThumbnail(item.src, thumbsByOriginal)
             const displaySrc = thumb || item.src
+            
+            // Get srcSet for responsive images
+            const filename = item.src.split('/').pop() || ''
+            const srcSetKey = `/assets/${filename}__srcset`
+            const srcSet = thumbsByOriginal[srcSetKey]
             
             const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
             const isPriorityRow = (startIndex + ri) < Math.max(0, eagerRowCount || 0)
@@ -152,6 +212,7 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
                     decoding="async"
                     fetchPriority={fetchPriority as any}
                     src={displaySrc}
+                    srcSet={srcSet}
                     sizes={sizes}
                     alt={item.alt}
                     width={w}
@@ -225,6 +286,24 @@ function findThumbnail(src: string, thumbsManifest: Record<string, string>): str
   const filename = src.split('/').pop() || ''
   const manifestKey = `/assets/${filename}`
   return thumbsManifest[manifestKey]
+}
+
+// Load image aspect ratio efficiently
+function loadImageAspect(src: string): Promise<number> {
+  return new Promise((resolve) => {
+    const img = new Image()
+    img.onload = () => {
+      if (img.naturalHeight === 0) {
+        resolve(1)
+        return
+      }
+      resolve(img.naturalWidth / img.naturalHeight)
+    }
+    img.onerror = () => resolve(1)
+    img.decoding = 'async'
+    img.fetchPriority = 'low' as any
+    img.src = src
+  })
 }
 
 function App() {
