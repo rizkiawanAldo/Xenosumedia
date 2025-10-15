@@ -34,7 +34,7 @@ async function build() {
 
   for await (const file of walk(SRC_PHOTOS_DIR)) {
     if (!isImage(file)) continue
-    const relFromSrc = "/" + (path.relative(path.join(ROOT, ""), file).replace(/\\/g, '/')) // e.g. assets/photos/event/img.jpg
+    const relFromSrc = "/" + (path.relative(path.join(ROOT, "/src/"), file).replace(/\\/g, '/')) // e.g. assets/photos/event/img.jpg
     const relPhotos = path.relative(SRC_PHOTOS_DIR, file).replace(/\\/g, '/') // e.g. event/img.jpg
     const outDirForFile = path.join(OUT_DIR, path.dirname(relPhotos))
     await ensureDir(outDirForFile)
