@@ -119,11 +119,11 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
 
-  // Parallelize aspect loading with a small concurrency limit to avoid bursts
+  // Load all aspects concurrently (use thumbs when available to avoid fetching originals)
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const concurrency = 8
+      const concurrency = Math.max(32, items.length)
       const queue: Promise<void>[] = []
       const enriched: JustifiedItem[] = new Array(items.length)
 
@@ -133,7 +133,8 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
           const i = nextIndex++
           if (i >= items.length) break
           const it = items[i]
-          const ratio = await loadImageAspect(it.src)
+          const srcForAspect = thumbsByOriginal[it.src] || it.src
+          const ratio = await loadImageAspect(srcForAspect)
           const r = getFilenameSeed(it.src)
           const tweak = 1 + (r - 0.5) * 0.2
           const aspectRatio = Math.max(0.3, Math.min(3.5, ratio * tweak))
@@ -152,64 +153,13 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
   const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
   const rows = useMemo(() => computeRows(withRatios, width, gap, baseRowHeight), [withRatios, width, gap, baseRowHeight])
 
-  // Virtualize rows based on scroll position relative to gallery container
-  const containerRef = ref
-  const [visibleRange, setVisibleRange] = useState<{ start: number, end: number }>({ start: 0, end: 0 })
-  const totalHeights = useMemo(() => {
-    const heights = rows.map((r) => r.height)
-    return heights
-  }, [rows])
-  const cumulative = useMemo(() => {
-    const out: number[] = new Array(totalHeights.length + 1)
-    out[0] = 0
-    for (let i = 0; i < totalHeights.length; i++) {
-      // include margin gap between rows except before the first
-      out[i + 1] = out[i] + totalHeights[i] + (i === totalHeights.length - 1 ? 0 : gap)
-    }
-    return out
-  }, [totalHeights, gap])
-  const totalHeight = cumulative[cumulative.length - 1] || 0
-
-  useEffect(() => {
-    const el = containerRef.current
-    if (!el) return
-    let raf = 0
-    const onScroll = () => {
-      if (raf) return
-      raf = requestAnimationFrame(() => {
-        raf = 0
-        const rect = el.getBoundingClientRect()
-        const viewportTop = Math.max(0, -rect.top)
-        const viewportHeight = window.innerHeight
-        const buffer = 800
-        const viewStart = Math.max(0, viewportTop - buffer)
-        const viewEnd = viewportTop + viewportHeight + buffer
-        // binary search cumulative to find indices
-        const start = Math.max(0, lowerBound(cumulative, viewStart) - 1)
-        const end = Math.min(rows.length, lowerBound(cumulative, viewEnd) + 1)
-        setVisibleRange((prev) => (prev.start !== start || prev.end !== end ? { start, end } : prev))
-      })
-    }
-    onScroll()
-    window.addEventListener('scroll', onScroll, { passive: true })
-    window.addEventListener('resize', onScroll)
-    return () => {
-      if (raf) cancelAnimationFrame(raf)
-      window.removeEventListener('scroll', onScroll)
-      window.removeEventListener('resize', onScroll)
-    }
-  }, [containerRef, cumulative, rows.length])
-
-  const startIndex = visibleRange.start
-  const endIndex = Math.min(rows.length, Math.max(visibleRange.end, startIndex + 6)) // ensure some rows on first render
-  const topSpacer = cumulative[startIndex] || 0
-  const bottomSpacer = totalHeight - (cumulative[endIndex] || 0)
+  // Render all rows (no virtualization) so images across categories load simultaneously
+  const startIndex = 0
+  const endIndex = rows.length
 
   return (
     <div ref={ref} className="jg">
-      {topSpacer > 0 && (
-        <div style={{ height: `${topSpacer}px` }} />
-      )}
+      {/* no top spacer when not virtualizing */}
       {rows.slice(startIndex, endIndex).map((row, ri) => (
         <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
           {row.items.map(({ item, width: w, height: h, globalIndex }) => {
@@ -223,9 +173,8 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
             const displaySrc = thumb || item.src
             const srcSet = thumbsByOriginal[item.src + "__srcset"]
             const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
-            const isPriorityRow = (startIndex + ri) <= startIndex + 1
-            const loading = isPriorityRow ? 'eager' : 'lazy'
-            const fetchPriority = isPriorityRow ? 'high' : 'low'
+            const loading = 'eager'
+            const fetchPriority = 'high'
             return (
               <button
                 key={item.src}
@@ -254,22 +203,12 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
           })}
         </div>
       ))}
-      {bottomSpacer > 0 && (
-        <div style={{ height: `${bottomSpacer}px` }} />
-      )}
+      {/* no bottom spacer when not virtualizing */}
     </div>
   )
 }
 
-function lowerBound(arr: number[], target: number): number {
-  let lo = 0, hi = arr.length
-  while (lo < hi) {
-    const mid = (lo + hi) >>> 1
-    if (arr[mid] < target) lo = mid + 1
-    else hi = mid
-  }
-  return lo
-}
+// lowerBound was used for virtualization; removed when rendering all rows
 
 function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null, setExif: (v: any) => void }) {
   useEffect(() => {
@@ -531,9 +470,7 @@ function App() {
             <div className="jg-shimmer" aria-hidden="true" />
             <img
               className="lightbox-image"
-              src={thumbsManifest[allImages[lightboxIndex].src] || allImages[lightboxIndex].src}
-              srcSet={thumbsManifest[allImages[lightboxIndex].src + "__srcset"]}
-              sizes="100vw"
+              src={allImages[lightboxIndex].src}
               alt={allImages[lightboxIndex].alt}
               decoding="async"
               fetchPriority="high"
