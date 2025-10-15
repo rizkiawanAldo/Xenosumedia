@@ -214,6 +214,12 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
         <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
           {row.items.map(({ item, width: w, height: h, globalIndex }) => {
             const thumb = thumbsByOriginal[item.src]
+            {if (!thumbsByOriginal) {
+              console.log("missing thumbsByOriginal")
+            }}
+            {if (!thumb) {
+              console.log("missing thumb for ", item.src)
+            }}
             const displaySrc = thumb || item.src
             return (
               <button
