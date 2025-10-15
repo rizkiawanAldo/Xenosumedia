@@ -221,6 +221,11 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
               console.log("missing thumb for ", item.src)
             }}
             const displaySrc = thumb || item.src
+            const srcSet = thumbsByOriginal[item.src + "__srcset"]
+            const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
+            const isPriorityRow = (startIndex + ri) <= startIndex + 1
+            const loading = isPriorityRow ? 'eager' : 'lazy'
+            const fetchPriority = isPriorityRow ? 'high' : 'low'
             return (
               <button
                 key={item.src}
@@ -229,7 +234,7 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
                 aria-label={`Open ${item.alt}`}
                 style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
               >
-                <img loading="lazy" decoding="async" fetchPriority="low" src={displaySrc} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
+                <img loading={loading as any} decoding="async" fetchPriority={fetchPriority as any} src={displaySrc} srcSet={srcSet} sizes={sizes} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
               </button>
             )
           })}
@@ -510,7 +515,9 @@ function App() {
           <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); showPrev(); }}>‹</button>
           <img
             className="lightbox-image"
-            src={allImages[lightboxIndex].src}
+            src={thumbsManifest[allImages[lightboxIndex].src] || allImages[lightboxIndex].src}
+            srcSet={thumbsManifest[allImages[lightboxIndex].src + "__srcset"]}
+            sizes="100vw"
             alt={allImages[lightboxIndex].alt}
             onClick={(e) => e.stopPropagation()}
             decoding="async"

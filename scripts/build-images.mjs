@@ -41,29 +41,32 @@ async function build() {
     await ensureDir(OUT_DIR)
 
     const baseName = path.basename(file, path.extname(file))
-    const outWebp = path.join(outDirForFile, `${baseName}.webp`)
-
-    // Generate a reasonably sized thumbnail for grid; keep aspect ratio, cap width
     const buffer = await fs.readFile(file)
     const image = sharp(buffer)
     const meta = await image.metadata()
-    const targetWidth = 1200
-    const width = meta.width || targetWidth
+    const origWidth = meta.width || 2000
 
-    const pipeline = sharp(buffer)
-      .resize({ width: Math.min(width, targetWidth), withoutEnlargement: true })
-      .webp({ quality: 50, effort: 5 })
+    const widths = [400, 800, 1200]
+    const urls = {}
+    for (const w of widths) {
+      const target = Math.min(origWidth, w)
+      const outPath = path.join(outDirForFile, `${baseName}-${w}.webp`)
+      await sharp(buffer)
+        .resize({ width: target, withoutEnlargement: true })
+        .webp({ quality: 50, effort: 5 })
+        .toFile(outPath)
+      urls[w] = `/thumbs/${baseName}-${w}.webp`
+    }
 
-    await pipeline.toFile(outWebp)
-
-    // Public URL now flattened as well
-    const publicThumbPath = `/thumbs/${baseName}.webp`
-
+    // Default to 800 for src to balance quality/perf
+    const defaultUrl = urls[800] || urls[widths[widths.length-1]]
     const prodsrc = `/assets/${path.basename(file)}`
-    manifest[prodsrc] = publicThumbPath
+    manifest[prodsrc] = defaultUrl
+    manifest[prodsrc+"__srcset"] = `${urls[400]} 400w, ${urls[800]} 800w, ${urls[1200]} 1200w`
 
-    // for local development, we need to add the src path to the manifest
-    manifest['/src'+relFromSrc] = publicThumbPath
+    // for local development, include /src path mapping too
+    manifest['/src'+relFromSrc] = defaultUrl
+    manifest['/src'+relFromSrc+"__srcset"] = `${urls[400]} 400w, ${urls[800]} 800w, ${urls[1200]} 1200w`
   }
 
   await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8')
