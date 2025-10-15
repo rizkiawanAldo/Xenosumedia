@@ -37,6 +37,9 @@ a { color: inherit; text-decoration: none; }
   /* Full-bleed across viewport while nested in centered container */
   margin-left: calc(50% - 50vw);
   margin-right: calc(50% - 50vw);
+  border-block-end-width: 6px;
+  border-block-end-style: solid;
+  border-block-end-color: var(--color-accent);
 }
 .site-header-inner {
   max-width: var(--max-width);

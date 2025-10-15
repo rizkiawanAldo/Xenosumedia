@@ -1,8 +1,8 @@
 #root {
-  max-width: 1280px;
+  max-width: none;
   margin: 0 auto;
-  padding: 2rem;
-  text-align: center;
+  padding: 0;
+  text-align: initial;
 }
 
 .logo {
@@ -53,6 +53,8 @@
   background-size: 200% 100%;
   animation: jg-shimmer 1.2s infinite;
   transition: opacity 200ms ease;
+  pointer-events: none;
+  z-index: 0;
 }
 .jg-img.loaded .jg-shimmer,
 .lightbox-img-wrap.loaded .jg-shimmer {
@@ -66,4 +68,18 @@
 .lightbox-img-wrap {
   position: relative;
   display: inline-block;
+}
+
+/* Fade-in + translate-up on image load */
+.jg-img img, .lightbox-img-wrap img {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 1000ms ease, transform 800ms ease;
+  will-change: opacity, transform;
+  position: relative;
+  z-index: 1;
+}
+.jg-img.loaded img, .lightbox-img-wrap.loaded img {
+  opacity: 1;
+  transform: translateY(0);
 }

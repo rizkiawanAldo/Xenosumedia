@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import './App.css'
 import type { MutableRefObject } from 'react'
 
 type CategoryKey = string
@@ -114,7 +115,7 @@ function computeRows(
   return rows
 }
 
-function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageItem[], onOpen: (globalIndex: number) => void, thumbsByOriginal: Record<string, string> }) {
+function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { items: ImageItem[], onOpen: (globalIndex: number) => void, thumbsByOriginal: Record<string, string>, eagerRowCount: number }) {
   const gap = 14
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
@@ -173,8 +174,9 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
             const displaySrc = thumb || item.src
             const srcSet = thumbsByOriginal[item.src + "__srcset"]
             const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
-            const loading = 'eager'
-            const fetchPriority = 'high'
+            const isPriorityRow = (startIndex + ri) < Math.max(0, eagerRowCount || 0)
+            const loading = isPriorityRow ? 'eager' : 'lazy'
+            const fetchPriority = isPriorityRow ? 'high' : 'low'
             return (
               <button
                 key={item.src}
@@ -425,7 +427,7 @@ function App() {
           </div>
         </section>
 
-        {categories.map((cat) => (
+        {categories.map((cat, catIdx) => (
           <section key={cat} id={cat.toLowerCase()} className="gallery-section">
             <div className="section-header">
               <h2>{cat}</h2>
@@ -433,6 +435,7 @@ function App() {
             <JustifiedGallery
               items={imagesByCategory[cat]}
               thumbsByOriginal={thumbsManifest}
+              eagerRowCount={catIdx < 2 ? 3 : 2}
               onOpen={(globalIndex) => {
                 const img = imagesByCategory[cat][globalIndex]
                 const idx = allImages.findIndex((g) => g === img)
