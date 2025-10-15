@@ -1,82 +1,70 @@
-import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto'; // Import the crypto module for hashing
-import sharp from 'sharp';
+import { promises as fs } from 'node:fs'
+import path from 'node:path'
+import sharp from 'sharp'
 
-const ROOT = path.resolve(process.cwd());
-const SRC_PHOTOS_DIR = path.join(ROOT, 'src', 'assets', 'photos');
-const OUT_DIR = path.join(ROOT, 'public', 'thumbs');
-const MANIFEST_PATH = path.join(ROOT, 'public', 'generated', 'manifest.json');
+const ROOT = path.resolve(process.cwd())
+const SRC_PHOTOS_DIR = path.join(ROOT, 'src', 'assets', 'photos')
+const OUT_DIR = path.join(ROOT, 'public', 'thumbs')
+const MANIFEST_PATH = path.join(ROOT, 'public', 'generated', 'manifest.json')
 
 async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
+  await fs.mkdir(dir, { recursive: true })
 }
 
 async function* walk(dir) {
-  const entries = await fs.readdir(dir, { withFileTypes: true });
+  const entries = await fs.readdir(dir, { withFileTypes: true })
   for (const entry of entries) {
-    const full = path.join(dir, entry.name);
+    const full = path.join(dir, entry.name)
     if (entry.isDirectory()) {
-      yield* walk(full);
+      yield* walk(full)
     } else {
-      yield full;
+      yield full
     }
   }
 }
 
 function isImage(file) {
-  return /\.(jpe?g|png|webp)$/i.test(file);
+  return /\.(jpe?g|png|webp)$/i.test(file)
 }
 
 async function build() {
-  const manifest = {};
-  await ensureDir(OUT_DIR);
-  await ensureDir(path.dirname(MANIFEST_PATH));
+  const manifest = {}
+  await ensureDir(OUT_DIR)
+  await ensureDir(path.dirname(MANIFEST_PATH))
 
   for await (const file of walk(SRC_PHOTOS_DIR)) {
-    if (!isImage(file)) continue;
-    
-    const relFromSrc = "/" + (path.relative(path.join(ROOT, "/src/"), file).replace(/\\/g, '/')); // e.g., assets/photos/event/img.jpg
-    const relPhotos = path.relative(SRC_PHOTOS_DIR, file).replace(/\\/g, '/'); // e.g., event/img.jpg
-    const outDirForFile = path.join(OUT_DIR, path.dirname(relPhotos));
-    await ensureDir(outDirForFile);
+    if (!isImage(file)) continue
+    const relFromSrc = "/" + (path.relative(path.join(ROOT, "/src/"), file).replace(/\\/g, '/')) // e.g. assets/photos/event/img.jpg
+    const relPhotos = path.relative(SRC_PHOTOS_DIR, file).replace(/\\/g, '/') // e.g. event/img.jpg
+    const outDirForFile = path.join(OUT_DIR, path.dirname(relPhotos))
+    await ensureDir(outDirForFile)
 
-    const baseName = path.basename(file, path.extname(file));
+    const baseName = path.basename(file, path.extname(file))
+    const outWebp = path.join(outDirForFile, `${baseName}.webp`)
 
-    const buffer = await fs.readFile(file);
-    const image = sharp(buffer);
-    const meta = await image.metadata();
-    const targetWidth = 1200;
-    const width = meta.width || targetWidth;
+    // Generate a reasonably sized thumbnail for grid; keep aspect ratio, cap width
+    const buffer = await fs.readFile(file)
+    const image = sharp(buffer)
+    const meta = await image.metadata()
+    const targetWidth = 1200
+    const width = meta.width || targetWidth
 
     const pipeline = sharp(buffer)
       .resize({ width: Math.min(width, targetWidth), withoutEnlargement: true })
-      .webp({ quality: 50, effort: 5 });
+      .webp({ quality: 50, effort: 5 })
 
-    const thumbnailBuffer = await pipeline.toBuffer();
-    const hash = crypto.createHash('sha256').update(thumbnailBuffer).digest('hex').substring(0, 8);
-    
-    const outWebp = path.join(outDirForFile, `${baseName}.webp`);
+    await pipeline.toFile(outWebp)
 
-    await fs.writeFile(outWebp, thumbnailBuffer);
-
-    // The value remains the same, referencing the hash-based file
-    const publicThumbPath = `/thumbs/${path.relative(OUT_DIR, outWebp).replace(/\\/g, '/')}`;
-
-    // The key now includes both the original relative path and the hash
-    const manifestKey = `${(relFromSrc.split('.')).join('-' + hash + '.')}`;
-
-
-    
-    manifest[manifestKey] = publicThumbPath;
-    manifest["/src"+relFromSrc] = publicThumbPath;
+    const publicThumbPath = `/thumbs/${relPhotos.replace(/\\/g, '/').replace(/\.[^.]+$/, '.webp')}`
+    manifest[relFromSrc] = publicThumbPath
+    manifest['/src'+relFromSrc] = publicThumbPath
   }
 
-  await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8');
-  console.log(`Wrote manifest with ${Object.keys(manifest).length} entries to ${MANIFEST_PATH}`);
+  await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8')
+  console.log(`Wrote manifest with ${Object.keys(manifest).length} entries to ${MANIFEST_PATH}`)
 }
 
 build().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});
+  console.error(err)
+  process.exit(1)
+})
