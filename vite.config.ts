@@ -7,12 +7,21 @@ export default defineConfig({
   base: '/',
   build: {
     assetsDir: 'assets',
+    minify: 'esbuild',
     rollupOptions: {
       output: {
-        entryFileNames: 'assets/[name].js',
-        chunkFileNames: 'assets/[name].js',
-        assetFileNames: 'assets/[name][extname]',
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+        manualChunks: {
+          vendor: ['react', 'react-dom'],
+        },
       },
     },
+    target: 'es2015',
+    cssCodeSplit: false,
+  },
+  optimizeDeps: {
+    include: ['react', 'react-dom'],
   },
 })

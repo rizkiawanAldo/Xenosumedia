@@ -50,22 +50,6 @@ function useContainerWidth<T extends HTMLElement>(): [MutableRefObject<T | null>
   return [ref, width]
 }
 
-function loadImageAspect(src: string): Promise<number> {
-  return new Promise((resolve) => {
-    const img = new Image()
-    img.onload = () => {
-      if (img.naturalHeight === 0) {
-        resolve(1)
-        return
-      }
-      resolve(img.naturalWidth / img.naturalHeight)
-    }
-    img.onerror = () => resolve(1)
-    img.decoding = 'async'
-    img.fetchPriority = 'low' as any
-    img.src = src
-  })
-}
 
 function computeRows(
   items: JustifiedItem[],
@@ -120,35 +104,16 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
 
-  // Load all aspects concurrently (use thumbs when available to avoid fetching originals)
+  // Simplified: Just load all images with default aspect ratios for now
   useEffect(() => {
-    let cancelled = false
-    ;(async () => {
-      const concurrency = Math.max(32, items.length)
-      const queue: Promise<void>[] = []
-      const enriched: JustifiedItem[] = new Array(items.length)
-
-      let nextIndex = 0
-      async function worker() {
-        while (true) {
-          const i = nextIndex++
-          if (i >= items.length) break
-          const it = items[i]
-          const srcForAspect = thumbsByOriginal[it.src] || it.src
-          const ratio = await loadImageAspect(srcForAspect)
-          const r = getFilenameSeed(it.src)
-          const tweak = 1 + (r - 0.5) * 0.2
-          const aspectRatio = Math.max(0.3, Math.min(3.5, ratio * tweak))
-          const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
-          ;(e as any).__globalIndex = i
-          enriched[i] = e
-        }
-      }
-      for (let c = 0; c < concurrency; c++) queue.push(worker())
-      await Promise.all(queue)
-      if (!cancelled) setWithRatios(enriched)
-    })()
-    return () => { cancelled = true }
+    // Load all images with default aspect ratios immediately
+    const defaultItems: JustifiedItem[] = items.map((it, i) => ({
+      ...it,
+      aspectRatio: 1.5, // Default aspect ratio
+      __globalIndex: i
+    } as JustifiedItem & { __globalIndex?: number }))
+    
+    setWithRatios(defaultItems)
   }, [items])
 
   const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
@@ -164,15 +129,10 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
       {rows.slice(startIndex, endIndex).map((row, ri) => (
         <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
           {row.items.map(({ item, width: w, height: h, globalIndex }) => {
-            const thumb = thumbsByOriginal[item.src]
-            {if (!thumbsByOriginal) {
-              console.log("missing thumbsByOriginal")
-            }}
-            {if (!thumb) {
-              console.log("missing thumb for ", item.src)
-            }}
+            // Use thumbnail if available, fallback to original
+            const thumb = findThumbnail(item.src, thumbsByOriginal)
             const displaySrc = thumb || item.src
-            const srcSet = thumbsByOriginal[item.src + "__srcset"]
+            
             const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
             const isPriorityRow = (startIndex + ri) < Math.max(0, eagerRowCount || 0)
             const loading = isPriorityRow ? 'eager' : 'lazy'
@@ -192,9 +152,10 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
                     decoding="async"
                     fetchPriority={fetchPriority as any}
                     src={displaySrc}
-                    srcSet={srcSet}
                     sizes={sizes}
                     alt={item.alt}
+                    width={w}
+                    height={h}
                     onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
                     onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
                     style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }}
@@ -258,6 +219,14 @@ function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: numb
   )
 }
 
+
+// Simple thumbnail lookup function
+function findThumbnail(src: string, thumbsManifest: Record<string, string>): string | undefined {
+  const filename = src.split('/').pop() || ''
+  const manifestKey = `/assets/${filename}`
+  return thumbsManifest[manifestKey]
+}
+
 function App() {
   const [thumbsManifest, setThumbsManifest] = useState<Record<string, string>>({})
 
@@ -265,7 +234,11 @@ function App() {
     let cancelled = false
     fetch('/generated/manifest.json')
       .then((r) => r.ok ? r.json() : {})
-      .then((m) => { if (!cancelled) setThumbsManifest(m || {}) })
+      .then((m) => { 
+        if (!cancelled) {
+          setThumbsManifest(m || {})
+        }
+      })
       .catch(() => { if (!cancelled) setThumbsManifest({}) })
     return () => { cancelled = true }
   }, [])
@@ -289,6 +262,7 @@ function App() {
         const item: ImageItem = { src: url, alt: `${category} ${name}`, category }
         if (!byCat[category]) byCat[category] = []
         byCat[category].push(item)
+        
       })
 
     return byCat
@@ -300,6 +274,16 @@ function App() {
     const first = Object.entries(banners).sort(([a],[b]) => a.localeCompare(b, undefined, { numeric: true }))[0]?.[1]
     return first || ''
   }, [])
+
+  // Get hero thumbnail for faster loading
+  const heroThumbnail = useMemo(() => {
+    if (!bannerUrl) return ''
+    const filename = bannerUrl.split('/').pop() || ''
+    const manifestKey = `/assets/${filename}`
+    return thumbsManifest[manifestKey] || bannerUrl
+  }, [bannerUrl, thumbsManifest])
+
+
 
   const categories: CategoryKey[] = useMemo(() => Object.keys(imagesByCategory), [imagesByCategory])
   const allImages: ImageItem[] = useMemo(() => categories.flatMap((c) => imagesByCategory[c] || []), [categories, imagesByCategory])
@@ -418,7 +402,24 @@ function App() {
       <main>
         <section id="hero" className="hero">
           <div className="hero-bg">
-            {bannerUrl && <img className="hero-img" src={bannerUrl} alt="" decoding="async" fetchPriority="high" />}
+            {heroThumbnail && (
+              <img 
+                className="hero-img" 
+                src={heroThumbnail} 
+                alt="" 
+                decoding="async" 
+                fetchPriority="high"
+                width="1200"
+                height="450"
+                style={{ aspectRatio: '16/6' }}
+                onError={(e) => {
+                  // Fallback to original if thumbnail fails
+                  if (e.currentTarget.src !== bannerUrl) {
+                    e.currentTarget.src = bannerUrl
+                  }
+                }}
+              />
+            )}
           </div>
           <div className="hero-scrim" />
           <div className="hero-content">
@@ -435,7 +436,7 @@ function App() {
             <JustifiedGallery
               items={imagesByCategory[cat]}
               thumbsByOriginal={thumbsManifest}
-              eagerRowCount={catIdx < 2 ? 3 : 2}
+              eagerRowCount={catIdx === 0 ? 1 : 0}
               onOpen={(globalIndex) => {
                 const img = imagesByCategory[cat][globalIndex]
                 const idx = allImages.findIndex((g) => g === img)
