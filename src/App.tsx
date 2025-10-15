@@ -114,7 +114,7 @@ function computeRows(
   return rows
 }
 
-function JustifiedGallery({ items, onOpen }: { items: ImageItem[], onOpen: (globalIndex: number) => void }) {
+function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageItem[], onOpen: (globalIndex: number) => void, thumbsByOriginal: Record<string, string> }) {
   const gap = 14
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
@@ -212,17 +212,21 @@ function JustifiedGallery({ items, onOpen }: { items: ImageItem[], onOpen: (glob
       )}
       {rows.slice(startIndex, endIndex).map((row, ri) => (
         <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
-          {row.items.map(({ item, width: w, height: h, globalIndex }) => (
-            <button
-              key={item.src}
-              className="jg-item"
-              onClick={() => onOpen(globalIndex)}
-              aria-label={`Open ${item.alt}`}
-              style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
-            >
-              <img loading="lazy" decoding="async" fetchPriority="low" src={item.src} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
-            </button>
-          ))}
+          {row.items.map(({ item, width: w, height: h, globalIndex }) => {
+            const thumb = thumbsByOriginal[item.src]
+            const displaySrc = thumb || item.src
+            return (
+              <button
+                key={item.src}
+                className="jg-item"
+                onClick={() => onOpen(globalIndex)}
+                aria-label={`Open ${item.alt}`}
+                style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
+              >
+                <img loading="lazy" decoding="async" fetchPriority="low" src={displaySrc} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
+              </button>
+            )
+          })}
         </div>
       ))}
       {bottomSpacer > 0 && (
@@ -245,7 +249,7 @@ function lowerBound(arr: number[], target: number): number {
 function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null, setExif: (v: any) => void }) {
   useEffect(() => {
     let cancelled = false
-    if (!src || exif) return
+    if (!src) return
     ;(async () => {
       try {
         const { parse } = await import('exifr')
@@ -289,6 +293,17 @@ function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: numb
 }
 
 function App() {
+  const [thumbsManifest, setThumbsManifest] = useState<Record<string, string>>({})
+
+  useEffect(() => {
+    let cancelled = false
+    fetch('/generated/manifest.json')
+      .then((r) => r.ok ? r.json() : {})
+      .then((m) => { if (!cancelled) setThumbsManifest(m || {}) })
+      .catch(() => { if (!cancelled) setThumbsManifest({}) })
+    return () => { cancelled = true }
+  }, [])
+
   const imagesByCategory: Record<CategoryKey, ImageItem[]> = useMemo(() => {
     // Import all images in any subfolder under photos as URLs (Vite v7: use query/import)
     const all = import.meta.glob('./assets/photos/*/*.{jpg,jpeg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
@@ -326,10 +341,96 @@ function App() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [exif, setExif] = useState<{ fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null>(null)
 
-  const openLightbox = (index: number) => setLightboxIndex(index)
-  const closeLightbox = () => { setLightboxIndex(null); setExif(null) }
-  const showPrev = () => setLightboxIndex((idx) => (idx === null ? null : (idx + allImages.length - 1) % allImages.length))
-  const showNext = () => setLightboxIndex((idx) => (idx === null ? null : (idx + 1) % allImages.length))
+  // Track URL and scroll to keep UX stable on mobile back/close
+  const previousUrlRef = useRef<string | null>(null)
+  const savedScrollRef = useRef<number>(0)
+
+  const openLightbox = (index: number) => {
+    savedScrollRef.current = window.scrollY
+    // Save previous URL including hash to restore on manual close
+    previousUrlRef.current = window.location.href
+    // Push a hash identifying the lightbox so Back will close it
+    const newHash = `#lb=${index}`
+    if (window.location.hash !== newHash) {
+      window.history.pushState({ lb: index }, '', newHash)
+    } else {
+      // Ensure we still create a history entry even if same hash
+      window.history.pushState({ lb: index, dup: Date.now() }, '')
+    }
+    setLightboxIndex(index)
+  }
+
+  const closeLightbox = () => {
+    // If we are currently showing a lightbox hash, restore previous URL without navigating
+    if (typeof window !== 'undefined' && window.location.hash.startsWith('#lb=')) {
+      const prev = previousUrlRef.current
+      if (prev) {
+        window.history.replaceState(null, '', prev)
+      } else {
+        // If no previous captured, just remove the hash
+        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+      }
+    }
+    setLightboxIndex(null)
+    setExif(null)
+  }
+
+  // Close lightbox on browser Back. Preserve scroll position.
+  useEffect(() => {
+    function onPopState() {
+      // If leaving a lightbox state, close it and restore scroll
+      if (lightboxIndex !== null) {
+        setLightboxIndex(null)
+        setExif(null)
+        // Defer to override any hash-scroll that may occur
+        const y = savedScrollRef.current
+        if (typeof y === 'number') {
+          setTimeout(() => window.scrollTo({ top: y, behavior: 'instant' as any }), 0)
+        }
+      } else {
+        // Handle deep-links like #lb=12 opened directly
+        const m = /^#lb=(\d+)$/.exec(window.location.hash)
+        if (m) {
+          const idx = parseInt(m[1], 10)
+          if (!Number.isNaN(idx)) {
+            // Don't push new state here; just set UI state
+            setLightboxIndex(idx)
+          }
+        }
+      }
+    }
+    window.addEventListener('popstate', onPopState)
+    return () => window.removeEventListener('popstate', onPopState)
+  }, [lightboxIndex])
+
+  // On initial load, open lightbox if URL contains an lb hash
+  useEffect(() => {
+    const m = /^#lb=(\d+)$/.exec(window.location.hash)
+    if (m) {
+      const idx = parseInt(m[1], 10)
+      if (!Number.isNaN(idx)) {
+        previousUrlRef.current = window.location.href
+        setLightboxIndex(idx)
+      }
+    }
+  }, [])
+  const showPrev = () => setLightboxIndex((idx) => {
+    if (idx === null) return null
+    setExif(null)
+    return (idx + allImages.length - 1) % allImages.length
+  })
+  const showNext = () => setLightboxIndex((idx) => {
+    if (idx === null) return null
+    setExif(null)
+    return (idx + 1) % allImages.length
+  })
+
+  // Clear EXIF whenever the displayed image changes so it refetches
+  useEffect(() => {
+    if (lightboxIndex !== null) {
+      setExif(null)
+    }
+  }, [lightboxIndex])
 
   return (
     <div className="site">
@@ -367,6 +468,7 @@ function App() {
             </div>
             <JustifiedGallery
               items={imagesByCategory[cat]}
+              thumbsByOriginal={thumbsManifest}
               onOpen={(globalIndex) => {
                 const img = imagesByCategory[cat][globalIndex]
                 const idx = allImages.findIndex((g) => g === img)
@@ -410,6 +512,7 @@ function App() {
           />
           {/* EXIF on-demand */}
           <ExifPanel
+            key={allImages[lightboxIndex].src}
             src={allImages[lightboxIndex].src}
             exif={exif}
             setExif={setExif}
