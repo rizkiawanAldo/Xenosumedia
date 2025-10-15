@@ -60,6 +60,8 @@ function loadImageAspect(src: string): Promise<number> {
       resolve(img.naturalWidth / img.naturalHeight)
     }
     img.onerror = () => resolve(1)
+    img.decoding = 'async'
+    img.fetchPriority = 'low' as any
     img.src = src
   })
 }
@@ -117,21 +119,31 @@ function JustifiedGallery({ items, onOpen }: { items: ImageItem[], onOpen: (glob
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
 
+  // Parallelize aspect loading with a small concurrency limit to avoid bursts
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const enriched: JustifiedItem[] = []
-      for (let i = 0; i < items.length; i++) {
-        const it = items[i]
-        const ratio = await loadImageAspect(it.src)
-        // subtle, stable per-image tweak ±10% to aspect weight
-        const r = getFilenameSeed(it.src)
-        const tweak = 1 + (r - 0.5) * 0.2
-        const aspectRatio = Math.max(0.3, Math.min(3.5, ratio * tweak))
-        const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
-        ;(e as any).__globalIndex = i
-        enriched.push(e)
+      const concurrency = 8
+      const queue: Promise<void>[] = []
+      const enriched: JustifiedItem[] = new Array(items.length)
+
+      let nextIndex = 0
+      async function worker() {
+        while (true) {
+          const i = nextIndex++
+          if (i >= items.length) break
+          const it = items[i]
+          const ratio = await loadImageAspect(it.src)
+          const r = getFilenameSeed(it.src)
+          const tweak = 1 + (r - 0.5) * 0.2
+          const aspectRatio = Math.max(0.3, Math.min(3.5, ratio * tweak))
+          const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
+          ;(e as any).__globalIndex = i
+          enriched[i] = e
+        }
       }
+      for (let c = 0; c < concurrency; c++) queue.push(worker())
+      await Promise.all(queue)
       if (!cancelled) setWithRatios(enriched)
     })()
     return () => { cancelled = true }
@@ -140,10 +152,66 @@ function JustifiedGallery({ items, onOpen }: { items: ImageItem[], onOpen: (glob
   const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
   const rows = useMemo(() => computeRows(withRatios, width, gap, baseRowHeight), [withRatios, width, gap, baseRowHeight])
 
+  // Virtualize rows based on scroll position relative to gallery container
+  const containerRef = ref
+  const [visibleRange, setVisibleRange] = useState<{ start: number, end: number }>({ start: 0, end: 0 })
+  const totalHeights = useMemo(() => {
+    const heights = rows.map((r) => r.height)
+    return heights
+  }, [rows])
+  const cumulative = useMemo(() => {
+    const out: number[] = new Array(totalHeights.length + 1)
+    out[0] = 0
+    for (let i = 0; i < totalHeights.length; i++) {
+      // include margin gap between rows except before the first
+      out[i + 1] = out[i] + totalHeights[i] + (i === totalHeights.length - 1 ? 0 : gap)
+    }
+    return out
+  }, [totalHeights, gap])
+  const totalHeight = cumulative[cumulative.length - 1] || 0
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    let raf = 0
+    const onScroll = () => {
+      if (raf) return
+      raf = requestAnimationFrame(() => {
+        raf = 0
+        const rect = el.getBoundingClientRect()
+        const viewportTop = Math.max(0, -rect.top)
+        const viewportHeight = window.innerHeight
+        const buffer = 800
+        const viewStart = Math.max(0, viewportTop - buffer)
+        const viewEnd = viewportTop + viewportHeight + buffer
+        // binary search cumulative to find indices
+        const start = Math.max(0, lowerBound(cumulative, viewStart) - 1)
+        const end = Math.min(rows.length, lowerBound(cumulative, viewEnd) + 1)
+        setVisibleRange((prev) => (prev.start !== start || prev.end !== end ? { start, end } : prev))
+      })
+    }
+    onScroll()
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('resize', onScroll)
+    return () => {
+      if (raf) cancelAnimationFrame(raf)
+      window.removeEventListener('scroll', onScroll)
+      window.removeEventListener('resize', onScroll)
+    }
+  }, [containerRef, cumulative, rows.length])
+
+  const startIndex = visibleRange.start
+  const endIndex = Math.min(rows.length, Math.max(visibleRange.end, startIndex + 6)) // ensure some rows on first render
+  const topSpacer = cumulative[startIndex] || 0
+  const bottomSpacer = totalHeight - (cumulative[endIndex] || 0)
+
   return (
     <div ref={ref} className="jg">
-      {rows.map((row, ri) => (
-        <div key={ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px` }}>
+      {topSpacer > 0 && (
+        <div style={{ height: `${topSpacer}px` }} />
+      )}
+      {rows.slice(startIndex, endIndex).map((row, ri) => (
+        <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
           {row.items.map(({ item, width: w, height: h, globalIndex }) => (
             <button
               key={item.src}
@@ -152,13 +220,26 @@ function JustifiedGallery({ items, onOpen }: { items: ImageItem[], onOpen: (glob
               aria-label={`Open ${item.alt}`}
               style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
             >
-              <img loading="lazy" src={item.src} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
+              <img loading="lazy" decoding="async" fetchPriority="low" src={item.src} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
             </button>
           ))}
         </div>
       ))}
+      {bottomSpacer > 0 && (
+        <div style={{ height: `${bottomSpacer}px` }} />
+      )}
     </div>
   )
+}
+
+function lowerBound(arr: number[], target: number): number {
+  let lo = 0, hi = arr.length
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1
+    if (arr[mid] < target) lo = mid + 1
+    else hi = mid
+  }
+  return lo
 }
 
 function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null, setExif: (v: any) => void }) {
@@ -256,7 +337,7 @@ function App() {
         <div className="site-header-inner">
           <div className="brand">
             <a href="#hero" className="brand-logo-link" aria-label="Xenosumedia Home">
-              <img className="brand-logo" src="/logo-dark.png" alt="Xenosumedia logo" />
+              <img className="brand-logo" src="/logo-dark.png" alt="Xenosumedia logo" decoding="async" fetchPriority="low" />
             </a>
           </div>
           <nav className="nav">
@@ -270,7 +351,7 @@ function App() {
       <main>
         <section id="hero" className="hero">
           <div className="hero-bg">
-            {bannerUrl && <img className="hero-img" src={bannerUrl} alt="" />}
+            {bannerUrl && <img className="hero-img" src={bannerUrl} alt="" decoding="async" fetchPriority="high" />}
           </div>
           <div className="hero-scrim" />
           <div className="hero-content">
@@ -324,6 +405,8 @@ function App() {
             src={allImages[lightboxIndex].src}
             alt={allImages[lightboxIndex].alt}
             onClick={(e) => e.stopPropagation()}
+            decoding="async"
+            fetchPriority="high"
           />
           {/* EXIF on-demand */}
           <ExifPanel
