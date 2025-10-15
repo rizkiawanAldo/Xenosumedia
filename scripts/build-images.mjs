@@ -36,8 +36,9 @@ async function build() {
     if (!isImage(file)) continue
     const relFromSrc = "/" + (path.relative(path.join(ROOT, "/src/"), file).replace(/\\/g, '/')) // e.g. assets/photos/event/img.jpg
     const relPhotos = path.relative(SRC_PHOTOS_DIR, file).replace(/\\/g, '/') // e.g. event/img.jpg
-    const outDirForFile = path.join(OUT_DIR, path.dirname(relPhotos))
-    await ensureDir(outDirForFile)
+    // Flatten: write all thumbnails directly under public/thumbs
+    const outDirForFile = OUT_DIR
+    await ensureDir(OUT_DIR)
 
     const baseName = path.basename(file, path.extname(file))
     const outWebp = path.join(outDirForFile, `${baseName}.webp`)
@@ -55,8 +56,11 @@ async function build() {
 
     await pipeline.toFile(outWebp)
 
-    const publicThumbPath = `/thumbs/${relPhotos.replace(/\\/g, '/').replace(/\.[^.]+$/, '.webp')}`
+    // Public URL now flattened as well
+    const publicThumbPath = `/thumbs/${baseName}.webp`
     manifest[relFromSrc] = publicThumbPath
+
+    // for local development, we need to add the src path to the manifest
     manifest['/src'+relFromSrc] = publicThumbPath
   }
 
