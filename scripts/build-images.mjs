@@ -58,7 +58,9 @@ async function build() {
 
     // Public URL now flattened as well
     const publicThumbPath = `/thumbs/${baseName}.webp`
-    manifest[relFromSrc] = publicThumbPath
+
+    const prodsrc = `assets/${path.basename(file)}`
+    manifest[prodsrc] = publicThumbPath
 
     // for local development, we need to add the src path to the manifest
     manifest['/src'+relFromSrc] = publicThumbPath
