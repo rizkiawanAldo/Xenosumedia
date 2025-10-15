@@ -234,7 +234,21 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal }: { items: ImageIte
                 aria-label={`Open ${item.alt}`}
                 style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
               >
-                <img loading={loading as any} decoding="async" fetchPriority={fetchPriority as any} src={displaySrc} srcSet={srcSet} sizes={sizes} alt={item.alt} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }} />
+                <div className="jg-img" style={{ width: '100%', height: '100%' }}>
+                  <div className="jg-shimmer" aria-hidden="true" />
+                  <img
+                    loading={loading as any}
+                    decoding="async"
+                    fetchPriority={fetchPriority as any}
+                    src={displaySrc}
+                    srcSet={srcSet}
+                    sizes={sizes}
+                    alt={item.alt}
+                    onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+                    onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }}
+                  />
+                </div>
               </button>
             )
           })}
@@ -513,16 +527,20 @@ function App() {
         <div className="lightbox" role="dialog" aria-modal="true" onClick={closeLightbox}>
           <button className="lightbox-close" aria-label="Close" onClick={closeLightbox}>×</button>
           <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); showPrev(); }}>‹</button>
-          <img
-            className="lightbox-image"
-            src={thumbsManifest[allImages[lightboxIndex].src] || allImages[lightboxIndex].src}
-            srcSet={thumbsManifest[allImages[lightboxIndex].src + "__srcset"]}
-            sizes="100vw"
-            alt={allImages[lightboxIndex].alt}
-            onClick={(e) => e.stopPropagation()}
-            decoding="async"
-            fetchPriority="high"
-          />
+          <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
+            <div className="jg-shimmer" aria-hidden="true" />
+            <img
+              className="lightbox-image"
+              src={thumbsManifest[allImages[lightboxIndex].src] || allImages[lightboxIndex].src}
+              srcSet={thumbsManifest[allImages[lightboxIndex].src + "__srcset"]}
+              sizes="100vw"
+              alt={allImages[lightboxIndex].alt}
+              decoding="async"
+              fetchPriority="high"
+              onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+              onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+            />
+          </div>
           {/* EXIF on-demand */}
           <ExifPanel
             key={allImages[lightboxIndex].src}

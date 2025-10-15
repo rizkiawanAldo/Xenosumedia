@@ -40,3 +40,30 @@
 .read-the-docs {
   color: #888;
 }
+
+/* Gallery shimmer */
+.jg-img {
+  position: relative;
+  overflow: hidden;
+}
+.jg-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(0,0,0,0.06) 0%, rgba(0,0,0,0.12) 50%, rgba(0,0,0,0.06) 100%);
+  background-size: 200% 100%;
+  animation: jg-shimmer 1.2s infinite;
+  transition: opacity 200ms ease;
+}
+.jg-img.loaded .jg-shimmer,
+.lightbox-img-wrap.loaded .jg-shimmer {
+  opacity: 0;
+}
+@keyframes jg-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+.lightbox-img-wrap {
+  position: relative;
+  display: inline-block;
+}
