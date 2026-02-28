@@ -6,7 +6,7 @@ const ROOT = path.resolve(process.cwd())
 const SRC_PHOTOS_DIR = path.join(ROOT, 'src', 'assets', 'photos')
 const SRC_BANNER_DIR = path.join(ROOT, 'src', 'assets', 'banner')
 const OUT_DIR = path.join(ROOT, 'public', 'thumbs')
-const MANIFEST_PATH = path.join(ROOT, 'public', 'generated', 'manifest.json')
+const MANIFEST_PATH = path.join(ROOT, 'src', 'generated', 'manifest.json')
 
 async function ensureDir(dir) {
   await fs.mkdir(dir, { recursive: true })

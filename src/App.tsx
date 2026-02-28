@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import type { MutableRefObject } from 'react'
+import thumbsManifestData from './generated/manifest.json'
 
 type CategoryKey = string
 
@@ -112,62 +113,62 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
       aspectRatio: 1.5, // Default aspect ratio
       __globalIndex: i
     } as JustifiedItem & { __globalIndex?: number }))
-    
+
     setWithRatios(defaultItems)
 
     // Then calculate real aspect ratios in the background
     let cancelled = false
-    ;(async () => {
-      const enriched: JustifiedItem[] = new Array(items.length)
-      
-      // Load aspect ratios with moderate concurrency
-      const concurrency = 8
-      const queue: Promise<void>[] = []
-      let nextIndex = 0
+      ; (async () => {
+        const enriched: JustifiedItem[] = new Array(items.length)
 
-      async function worker() {
-        while (true) {
-          const i = nextIndex++
-          if (i >= items.length) break
-          const it = items[i]
-          
-          // Use thumbnail for aspect ratio calculation if available
-          const thumb = findThumbnail(it.src, thumbsByOriginal)
-          const srcForAspect = thumb || it.src
-          
-          try {
-            const ratio = await loadImageAspect(srcForAspect)
-            // Use actual aspect ratio without randomization
-            const aspectRatio = Math.max(0.3, Math.min(3.5, ratio))
-            const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
-            ;(e as any).__globalIndex = i
-            enriched[i] = e
-            
-            // Update state progressively for first few images to show improvement
-            if (i < 15 && !cancelled) {
-              const currentItems = [...defaultItems]
-              for (let j = 0; j <= i; j++) {
-                if (enriched[j]) {
-                  currentItems[j] = enriched[j]
+        // Load aspect ratios with moderate concurrency
+        const concurrency = 8
+        const queue: Promise<void>[] = []
+        let nextIndex = 0
+
+        async function worker() {
+          while (true) {
+            const i = nextIndex++
+            if (i >= items.length) break
+            const it = items[i]
+
+            // Use thumbnail for aspect ratio calculation if available
+            const thumb = findThumbnail(it.src, thumbsByOriginal)
+            const srcForAspect = thumb || it.src
+
+            try {
+              const ratio = await loadImageAspect(srcForAspect)
+              // Use actual aspect ratio without randomization
+              const aspectRatio = Math.max(0.3, Math.min(3.5, ratio))
+              const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
+                ; (e as any).__globalIndex = i
+              enriched[i] = e
+
+              // Update state progressively for first few images to show improvement
+              if (i < 15 && !cancelled) {
+                const currentItems = [...defaultItems]
+                for (let j = 0; j <= i; j++) {
+                  if (enriched[j]) {
+                    currentItems[j] = enriched[j]
+                  }
                 }
+                setWithRatios(currentItems)
               }
-              setWithRatios(currentItems)
+            } catch (error) {
+              // Keep default aspect ratio if loading fails
+              enriched[i] = defaultItems[i]
             }
-          } catch (error) {
-            // Keep default aspect ratio if loading fails
-            enriched[i] = defaultItems[i]
           }
         }
-      }
-      
-      for (let c = 0; c < concurrency; c++) queue.push(worker())
-      await Promise.all(queue)
-      
-      if (!cancelled) {
-        setWithRatios(enriched)
-      }
-    })()
-    
+
+        for (let c = 0; c < concurrency; c++) queue.push(worker())
+        await Promise.all(queue)
+
+        if (!cancelled) {
+          setWithRatios(enriched)
+        }
+      })()
+
     return () => { cancelled = true }
   }, [items, thumbsByOriginal])
 
@@ -187,12 +188,12 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
             // Use thumbnail if available, fallback to original
             const thumb = findThumbnail(item.src, thumbsByOriginal)
             const displaySrc = thumb || item.src
-            
+
             // Get srcSet for responsive images
             const filename = item.src.split('/').pop() || ''
             const srcSetKey = `/assets/${filename}__srcset`
             const srcSet = thumbsByOriginal[srcSetKey]
-            
+
             const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
             const isPriorityRow = (startIndex + ri) < Math.max(0, eagerRowCount || 0)
             const loading = isPriorityRow ? 'eager' : 'lazy'
@@ -238,23 +239,25 @@ function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: numb
   useEffect(() => {
     let cancelled = false
     if (!src) return
-    ;(async () => {
-      try {
-        const { parse } = await import('exifr')
-        const data = await parse(src, { pick: [
-          'FNumber', 'ExposureTime', 'ISO', 'FocalLength'
-        ] }) as any
-        if (cancelled) return
-        setExif({
-          fNumber: data?.FNumber,
-          exposureTime: data?.ExposureTime,
-          ISO: data?.ISO,
-          focalLength: data?.FocalLength
-        })
-      } catch {
-        if (!cancelled) setExif(null)
-      }
-    })()
+      ; (async () => {
+        try {
+          const { parse } = await import('exifr')
+          const data = await parse(src, {
+            pick: [
+              'FNumber', 'ExposureTime', 'ISO', 'FocalLength'
+            ]
+          }) as any
+          if (cancelled) return
+          setExif({
+            fNumber: data?.FNumber,
+            exposureTime: data?.ExposureTime,
+            ISO: data?.ISO,
+            focalLength: data?.FocalLength
+          })
+        } catch {
+          if (!cancelled) setExif(null)
+        }
+      })()
     return () => { cancelled = true }
   }, [src])
 
@@ -307,20 +310,7 @@ function loadImageAspect(src: string): Promise<number> {
 }
 
 function App() {
-  const [thumbsManifest, setThumbsManifest] = useState<Record<string, string>>({})
-
-  useEffect(() => {
-    let cancelled = false
-    fetch('/generated/manifest.json')
-      .then((r) => r.ok ? r.json() : {})
-      .then((m) => { 
-        if (!cancelled) {
-          setThumbsManifest(m || {})
-        }
-      })
-      .catch(() => { if (!cancelled) setThumbsManifest({}) })
-    return () => { cancelled = true }
-  }, [])
+  const thumbsManifest: Record<string, string> = thumbsManifestData
 
   const imagesByCategory: Record<CategoryKey, ImageItem[]> = useMemo(() => {
     // Import all images in any subfolder under photos as URLs (Vite v7: use query/import)
@@ -341,7 +331,7 @@ function App() {
         const item: ImageItem = { src: url, alt: `${category} ${name}`, category }
         if (!byCat[category]) byCat[category] = []
         byCat[category].push(item)
-        
+
       })
 
     return byCat
@@ -350,7 +340,7 @@ function App() {
   // Hero banner: import first image from src/assets/banner
   const bannerUrl = useMemo(() => {
     const banners = import.meta.glob('./assets/banner/*.{jpg,jpeg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
-    const first = Object.entries(banners).sort(([a],[b]) => a.localeCompare(b, undefined, { numeric: true }))[0]?.[1]
+    const first = Object.entries(banners).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))[0]?.[1]
     return first || ''
   }, [])
 
@@ -471,7 +461,7 @@ function App() {
             </a>
           </div>
           <nav className="nav">
-      
+
             <a href="#about">About</a>
             <a href="#contact">Contact</a>
           </nav>
@@ -482,11 +472,11 @@ function App() {
         <section id="hero" className="hero">
           <div className="hero-bg">
             {heroThumbnail && (
-              <img 
-                className="hero-img" 
-                src={heroThumbnail} 
-                alt="" 
-                decoding="async" 
+              <img
+                className="hero-img"
+                src={heroThumbnail}
+                alt=""
+                decoding="async"
                 fetchPriority="high"
                 width="1200"
                 height="450"
