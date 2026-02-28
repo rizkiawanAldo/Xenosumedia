@@ -310,7 +310,19 @@ function loadImageAspect(src: string): Promise<number> {
 }
 
 function App() {
-  const thumbsManifest: Record<string, string> = thumbsManifestData
+  const base = import.meta.env.BASE_URL
+  // Prefix all manifest paths with the app base so they resolve correctly
+  // on subdirectory deploys like GitHub Pages (/Xenosumedia/).
+  // Values are either a plain URL (/thumbs/x.webp) or a srcset string
+  // (/thumbs/x-400.webp 400w, /thumbs/x-800.webp 800w, ...).
+  const thumbsManifest: Record<string, string> = Object.fromEntries(
+    Object.entries(thumbsManifestData).map(([k, v]) => [
+      k,
+      // Rewrite every absolute path (starting with /) to include the app base.
+      // Handles both plain URLs and srcset strings with multiple entries.
+      v.replace(/(^|,\s*)\//g, `$1${base}`),
+    ])
+  )
 
   const imagesByCategory: Record<CategoryKey, ImageItem[]> = useMemo(() => {
     // Import all images in any subfolder under photos as URLs (Vite v7: use query/import)
@@ -457,7 +469,7 @@ function App() {
         <div className="site-header-inner">
           <div className="brand">
             <a href="#hero" className="brand-logo-link" aria-label="Xenosumedia Home">
-              <img className="brand-logo" src="/logo-dark.png" alt="Xenosumedia logo" decoding="async" fetchPriority="low" />
+              <img className="brand-logo" src={`${import.meta.env.BASE_URL}logo-dark.png`} alt="Xenosumedia logo" decoding="async" fetchPriority="low" />
             </a>
           </div>
           <nav className="nav">
