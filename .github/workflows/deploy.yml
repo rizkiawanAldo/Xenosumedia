@@ -30,6 +30,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Generates WebP thumbnails + writes src/generated/manifest.json
+      # (also runs automatically as part of `npm run build` via prebuild hook)
+      - name: Generate image thumbnails & manifest
+        run: node ./scripts/build-images.mjs
+
       - name: Build
         run: npm run build
 
@@ -48,4 +53,3 @@ jobs:
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
