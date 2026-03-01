@@ -37,6 +37,12 @@ jobs:
 
       - name: Build
         run: npm run build
+        env:
+          VITE_ADMIN_PASS_HASH: ${{ secrets.VITE_ADMIN_PASS_HASH }}
+          VITE_GITHUB_PAT: ${{ secrets.VITE_GITHUB_PAT }}
+          VITE_GITHUB_OWNER: rizkiawanAldo
+          VITE_GITHUB_REPO: Xenosumedia
+          VITE_GITHUB_BRANCH: main
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

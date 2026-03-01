@@ -463,6 +463,25 @@ function App() {
     }
   }, [lightboxIndex])
 
+  // Scroll-triggered fade-in for .reveal elements
+  useEffect(() => {
+    const els = document.querySelectorAll('.reveal')
+    if (!els.length) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((e) => {
+          if (e.isIntersecting) {
+            e.target.classList.add('visible')
+            io.unobserve(e.target)
+          }
+        })
+      },
+      { threshold: 0.12 }
+    )
+    els.forEach((el) => io.observe(el))
+    return () => io.disconnect()
+  }, [categories]) // re-run when categories load
+
   return (
     <div className="site">
       <header className="site-header">
@@ -510,7 +529,7 @@ function App() {
         </section>
 
         {categories.map((cat, catIdx) => (
-          <section key={cat} id={cat.toLowerCase()} className="gallery-section">
+          <section key={cat} id={cat.toLowerCase()} className="gallery-section reveal">
             <div className="section-header">
               <h2>{cat}</h2>
             </div>
@@ -527,24 +546,34 @@ function App() {
           </section>
         ))}
 
-        <section id="pricing" className="pricing">
-          <h2>Pricing</h2>
-          <span>Contact for pricing</span>
-        </section>
-
-        <section id="about" className="about">
-          <h2>About</h2>
-          <p>
-            Xenosumedia captures authentic moments across portraits, events, sports, and landscapes. The goal is simple:
-            make you feel the story in every frame.
-          </p>
-        </section>
-
-        <section id="contact" className="contact">
-          <h2>Contact</h2>
-          <p>Email: <a href="mailto:hello@xenosumedia.com">xenosumedia@gmail.com</a></p>
-          <p>Instagram: <a href="https://www.instagram.com/xenosumedia/">@xenosumedia</a></p>
-        </section>
+        <div className="info-grid reveal">
+          <div className="info-block" id="about">
+            <h2>About</h2>
+            <p>
+              Xenosumedia captures authentic moments across portraits, events,
+              sports, and landscapes. The goal is simple: make you feel the
+              story in every frame.
+            </p>
+            <p style={{ marginTop: '8px', fontSize: '0.85rem', color: 'var(--color-muted)' }}>
+              Available for bookings in Jakarta and surrounding areas.
+            </p>
+          </div>
+          <div className="info-block" id="contact">
+            <h2>Contact</h2>
+            <a className="contact-link" href="mailto:xenosumedia@gmail.com">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="m2 7 9.5 6.5a1 1 0 0 0 1 0L22 7" /></svg>
+              xenosumedia@gmail.com
+            </a>
+            <a className="contact-link" href="https://www.instagram.com/xenosumedia/" target="_blank" rel="noopener noreferrer">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="20" height="20" rx="5" /><circle cx="12" cy="12" r="5" /><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" /></svg>
+              @xenosumedia
+            </a>
+            <p style={{ marginTop: '20px', fontSize: '0.85rem', color: 'var(--color-muted)', lineHeight: 1.7 }}>
+              Pricing varies by shoot type and duration —
+              reach out for a custom quote.
+            </p>
+          </div>
+        </div>
       </main>
 
       {lightboxIndex !== null && (
@@ -576,6 +605,12 @@ function App() {
 
       <footer className="site-footer">
         <small>© {new Date().getFullYear()} Xenosumedia. All rights reserved.</small>
+        <div className="footer-links">
+          <a href="#hero">Home</a>
+          <a href="#about">About</a>
+          <a href="#contact">Contact</a>
+          <a href="https://www.instagram.com/xenosumedia/" target="_blank" rel="noopener noreferrer">Instagram</a>
+        </div>
       </footer>
     </div>
   )
