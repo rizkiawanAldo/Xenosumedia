@@ -30,6 +30,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Cache generated thumbnails — key changes only when source images change.
+      # On a cache hit, build-images.mjs skips sharp for existing thumbs.
+      - name: Cache thumbnails
+        uses: actions/cache@v4
+        with:
+          path: public/thumbs
+          key: thumbs-${{ hashFiles('src/assets/photos/**', 'src/assets/banner/**') }}
+          restore-keys: thumbs-
+
       # Generates WebP thumbnails + writes src/generated/manifest.json
       # (also runs automatically as part of `npm run build` via prebuild hook)
       - name: Generate image thumbnails & manifest
