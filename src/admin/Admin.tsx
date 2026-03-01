@@ -129,7 +129,10 @@ const ops = {
 
 // ─── Utils ───────────────────────────────────────────────────────────────
 async function sha256hex(text: string) {
-    const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
+    // Use self.crypto explicitly to reference the browser's Web Crypto API.
+    // Bare `crypto` can be shadowed by a Node.js shim when esbuild sees Node
+    // imports in vite.config.ts and applies them to the client bundle.
+    const buf = await self.crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))
     return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
 }
 
