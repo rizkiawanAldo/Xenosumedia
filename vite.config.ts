@@ -119,7 +119,7 @@ function adminDevPlugin() {
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [react(), adminDevPlugin()],
-  base: '/Xenosumedia/',
+  base: '/',
   build: {
     assetsDir: 'assets',
     minify: 'esbuild',
