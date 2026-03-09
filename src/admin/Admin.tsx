@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 
 // ─── Env ─────────────────────────────────────────────────────────────────
 const PASS_HASH = import.meta.env.VITE_ADMIN_PASS_HASH as string | undefined
@@ -13,6 +13,22 @@ const IS_DEV = import.meta.env.DEV
 type GhFile = { name: string; path: string; sha: string; download_url: string; type: 'file' | 'dir' }
 type Status = { type: 'success' | 'error' | 'info'; msg: string }
 type Progress = { done: number; total: number; current: string }
+
+type PendingChange =
+    | { type: 'upload'; cat: string; file: File; previewUrl: string }
+    | { type: 'delete'; img: GhFile; cat: string }
+    | { type: 'move'; img: GhFile; fromCat: string; toCat: string }
+    | { type: 'create-cat'; name: string }
+    | { type: 'delete-cat'; name: string }
+
+// Virtual image shown in grid (may be staged, not yet in GitHub)
+type VirtualImg = {
+    ghFile?: GhFile
+    previewUrl?: string
+    name: string
+    pendingStatus?: 'upload' | 'delete' | 'move-out' | 'move-in'
+    moveLabel?: string   // e.g. "→ portrait" or "from event"
+}
 
 // ─── GitHub API ──────────────────────────────────────────────────────────
 async function ghFetch(path: string, opts?: RequestInit) {
@@ -128,7 +144,6 @@ const ops = {
 }
 
 // ─── Utils ───────────────────────────────────────────────────────────────
-// Pure-JS SHA-256 — synchronous, no Web Crypto, unaffected by bundler shims.
 function sha256hex(message: string): string {
     const K = [0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
         0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
@@ -177,9 +192,32 @@ function fileToBase64(file: File): Promise<string> {
     })
 }
 
-const successMsg = (msg: string) => IS_DEV
-    ? `${msg} Commit & push to deploy.`
-    : `${msg} CI rebuild triggered (~3 min).`
+// Build the virtual image list for a category, applying pending changes on top of real images
+function computeVirtualImages(baseImages: GhFile[], cat: string, pending: PendingChange[]): VirtualImg[] {
+    const result: VirtualImg[] = baseImages.map(img => ({ ghFile: img, name: img.name }))
+
+    for (const change of pending) {
+        if (change.type === 'delete' && change.cat === cat) {
+            const idx = result.findIndex(v => v.ghFile?.sha === change.img.sha)
+            if (idx !== -1) result[idx] = { ...result[idx], pendingStatus: 'delete' }
+        }
+        if (change.type === 'move' && change.fromCat === cat) {
+            const idx = result.findIndex(v => v.ghFile?.sha === change.img.sha)
+            if (idx !== -1) result[idx] = { ...result[idx], pendingStatus: 'move-out', moveLabel: `→ ${change.toCat}` }
+        }
+        if (change.type === 'move' && change.toCat === cat) {
+            result.push({
+                ghFile: change.img, name: change.img.name,
+                pendingStatus: 'move-in', moveLabel: `← ${change.fromCat}`,
+            })
+        }
+        if (change.type === 'upload' && change.cat === cat) {
+            result.push({ previewUrl: change.previewUrl, name: change.file.name, pendingStatus: 'upload' })
+        }
+    }
+
+    return result
+}
 
 // ─── Styles ──────────────────────────────────────────────────────────────
 const C = {
@@ -188,6 +226,8 @@ const C = {
     text: '#e8e8e8', muted: '#666', subtle: '#444',
     accent: '#c9a84c', accentBg: 'rgba(201,168,76,0.12)',
     danger: '#f87171', dangerBg: 'rgba(239,68,68,0.12)', dangerBorder: 'rgba(239,68,68,0.25)',
+    green: '#4ade80', greenBg: 'rgba(34,197,94,0.12)', greenBorder: 'rgba(34,197,94,0.3)',
+    purple: '#c084fc', purpleBg: 'rgba(192,132,252,0.12)', purpleBorder: 'rgba(192,132,252,0.3)',
 }
 
 const s = {
@@ -202,6 +242,7 @@ const s = {
     btnAccent: { padding: '6px 11px', background: C.accent, border: 'none', borderRadius: 6, color: '#0d0d0d', fontWeight: 700, fontSize: '0.78rem', cursor: 'pointer' } as React.CSSProperties,
     btnDanger: { padding: '4px 9px', background: C.dangerBg, border: `1px solid ${C.dangerBorder}`, borderRadius: 5, color: C.danger, fontSize: '0.72rem', cursor: 'pointer' } as React.CSSProperties,
     btnGhost: { padding: '6px 13px', background: 'transparent', border: `1px solid ${C.border}`, borderRadius: 6, color: C.muted, fontSize: '0.76rem', cursor: 'pointer' } as React.CSSProperties,
+    btnPublish: { padding: '7px 16px', background: C.accent, border: 'none', borderRadius: 6, color: '#0d0d0d', fontWeight: 700, fontSize: '0.82rem', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6 } as React.CSSProperties,
     sidebar: { width: 228, flexShrink: 0, borderRight: `1px solid ${C.border}`, display: 'flex', flexDirection: 'column', overflow: 'hidden', background: C.surface } as React.CSSProperties,
     sidebarTop: { padding: '18px 16px 12px', borderBottom: `1px solid ${C.border2}` } as React.CSSProperties,
     sidebarTitle: { fontFamily: "'Playfair Display', serif", fontStyle: 'italic', fontSize: '1.05rem', margin: 0 } as React.CSSProperties,
@@ -220,7 +261,8 @@ const s = {
     newCatRow: { display: 'flex', gap: 6, marginBottom: 10 } as React.CSSProperties,
     newCatInput: { flex: 1, padding: '6px 10px', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 6, color: C.text, fontSize: '0.78rem', outline: 'none' } as React.CSSProperties,
     main: { flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' } as React.CSSProperties,
-    toolbar: { padding: '13px 22px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', background: C.surface, minHeight: 54 } as React.CSSProperties,
+    toolbar: { padding: '13px 22px', borderBottom: `1px solid ${C.border}`, display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' as const, background: C.surface, minHeight: 54 } as React.CSSProperties,
+    pendingBar: { padding: '10px 22px', borderBottom: `1px solid rgba(201,168,76,0.2)`, display: 'flex', alignItems: 'center', gap: 10, background: 'rgba(201,168,76,0.06)', flexWrap: 'wrap' as const } as React.CSSProperties,
     toolbarTitle: { flex: 1, fontWeight: 600, fontSize: '0.92rem', margin: 0, textTransform: 'capitalize' } as React.CSSProperties,
     devBadge: { fontSize: '0.68rem', color: '#4ade80', background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.2)', borderRadius: 4, padding: '2px 8px' } as React.CSSProperties,
     dropZone: (drag: boolean): React.CSSProperties => ({
@@ -231,11 +273,24 @@ const s = {
         transition: 'all 0.2s', fontSize: '0.78rem', color: C.muted,
     }),
     imageGrid: { flex: 1, overflowY: 'auto', padding: '16px 22px', display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(160px, 1fr))', gap: 10, alignContent: 'start' } as React.CSSProperties,
-    imageCard: { position: 'relative', borderRadius: 7, overflow: 'hidden', background: C.surface2, border: `1px solid ${C.border}`, aspectRatio: '4/3', cursor: 'zoom-in' } as React.CSSProperties,
+    imageCard: (status?: VirtualImg['pendingStatus']): React.CSSProperties => ({
+        position: 'relative', borderRadius: 7, overflow: 'hidden', background: C.surface2,
+        border: `2px solid ${status === 'upload' ? C.greenBorder : status === 'delete' ? C.dangerBorder : status === 'move-out' ? C.purpleBorder : status === 'move-in' ? C.purpleBorder : C.border}`,
+        aspectRatio: '4/3', cursor: status === 'delete' ? 'default' : 'zoom-in',
+        opacity: status === 'delete' || status === 'move-out' ? 0.45 : 1,
+        transition: 'all 0.15s',
+    }),
     imageThumb: { width: '100%', height: '100%', objectFit: 'cover', display: 'block' } as React.CSSProperties,
     imageOverlay: { position: 'absolute', inset: 0, background: 'rgba(0,0,0,0)', display: 'flex', flexDirection: 'column', justifyContent: 'space-between', padding: 7, opacity: 0, transition: 'all 0.18s', pointerEvents: 'none' } as React.CSSProperties,
     imageName: { fontSize: '0.62rem', color: '#ddd', background: 'rgba(0,0,0,0.7)', borderRadius: 3, padding: '2px 5px', wordBreak: 'break-all' as const, lineHeight: 1.4, alignSelf: 'flex-start' } as React.CSSProperties,
     imageActions: { display: 'flex', gap: 5, pointerEvents: 'auto' } as React.CSSProperties,
+    pendingBadge: (status: VirtualImg['pendingStatus']): React.CSSProperties => ({
+        position: 'absolute', top: 5, right: 5, fontSize: '0.6rem', fontWeight: 700,
+        padding: '2px 6px', borderRadius: 4, letterSpacing: '0.04em',
+        background: status === 'upload' ? C.greenBg : status === 'delete' ? C.dangerBg : C.purpleBg,
+        color: status === 'upload' ? C.green : status === 'delete' ? C.danger : C.purple,
+        border: `1px solid ${status === 'upload' ? C.greenBorder : status === 'delete' ? C.dangerBorder : C.purpleBorder}`,
+    }),
     progressBar: (pct: number): React.CSSProperties => ({ height: 3, background: `linear-gradient(to right, ${C.accent} ${pct}%, rgba(255,255,255,0.06) ${pct}%)`, margin: '0 22px', borderRadius: 2, transition: 'background 0.3s' }),
     status: (type: Status['type']): React.CSSProperties => ({
         padding: '9px 18px', margin: '10px 22px 0', borderRadius: 7, fontSize: '0.8rem',
@@ -248,7 +303,6 @@ const s = {
     lbOverlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.92)', zIndex: 1000, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: 20 } as React.CSSProperties,
     lbImg: { maxWidth: '90vw', maxHeight: '80vh', borderRadius: 8, boxShadow: '0 24px 80px rgba(0,0,0,0.8)', objectFit: 'contain' } as React.CSSProperties,
     lbBar: { display: 'flex', alignItems: 'center', gap: 10, marginTop: 14, flexWrap: 'wrap', justifyContent: 'center' } as React.CSSProperties,
-    lbName: { color: '#666', fontSize: '0.76rem' } as React.CSSProperties,
     modalBackdrop: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' } as React.CSSProperties,
     modalCard: { background: C.surface, border: `1px solid ${C.border}`, borderRadius: 12, padding: 28, width: 320 } as React.CSSProperties,
     catSelect: { width: '100%', padding: '9px 12px', background: C.surface2, border: `1px solid ${C.border}`, borderRadius: 7, color: C.text, fontSize: '0.85rem', marginBottom: 16, outline: 'none' } as React.CSSProperties,
@@ -269,9 +323,11 @@ export default function Admin() {
     const [drag, setDrag] = useState(false)
     const [progress, setProgress] = useState<Progress | null>(null)
     const [newCatName, setNewCatName] = useState('')
-    const [previewImg, setPreviewImg] = useState<GhFile | null>(null)
+    const [previewImg, setPreviewImg] = useState<VirtualImg | null>(null)
     const [moveImg, setMoveImg] = useState<GhFile | null>(null)
     const [moveDest, setMoveDest] = useState('')
+    const [pendingChanges, setPendingChanges] = useState<PendingChange[]>([])
+    const [publishing, setPublishing] = useState(false)
     const fileInputRef = useRef<HTMLInputElement>(null)
 
     const showStatus = useCallback((type: Status['type'], msg: string) => {
@@ -318,72 +374,147 @@ export default function Admin() {
 
     useEffect(() => { if (authed && selectedCat) loadImages(selectedCat) }, [authed, selectedCat, loadImages])
 
-    // ── Upload ────────────────────────────────────────────────────────────
-    const handleFiles = useCallback(async (files: File[]) => {
+    // ── Virtual image view (staged changes applied on top of real images) ─
+    const virtualImages = useMemo(() =>
+        selectedCat ? computeVirtualImages(images, selectedCat, pendingChanges) : [],
+        [images, selectedCat, pendingChanges]
+    )
+
+    // ── Stage: Upload ─────────────────────────────────────────────────────
+    const handleFiles = useCallback((files: File[]) => {
         if (!selectedCat) { showStatus('error', 'No category selected.'); return }
         const imgs = files.filter(f => /\.(jpe?g|png|webp)$/i.test(f.name))
         if (!imgs.length) { showStatus('error', 'Select JPG, PNG, or WebP files.'); return }
-        let ok = 0
-        for (let i = 0; i < imgs.length; i++) {
-            setProgress({ done: i, total: imgs.length, current: imgs[i].name })
-            try { await ops.uploadImage(selectedCat, imgs[i]); ok++ }
-            catch (err) { showStatus('error', `${imgs[i].name}: ${(err as Error).message}`) }
-        }
-        setProgress(null)
-        if (ok > 0) {
-            showStatus('success', successMsg(`Uploaded ${ok}/${imgs.length} photo(s).`))
-            loadImages(selectedCat)
-        }
-    }, [selectedCat, showStatus, loadImages])
+        const newChanges: PendingChange[] = imgs.map(file => ({
+            type: 'upload', cat: selectedCat, file, previewUrl: URL.createObjectURL(file),
+        }))
+        setPendingChanges(prev => [...prev, ...newChanges])
+        showStatus('info', `Staged ${imgs.length} file(s) for upload. Review and click Commit & Publish.`)
+    }, [selectedCat, showStatus])
 
     const handleDrop = useCallback((e: React.DragEvent) => {
         e.preventDefault(); setDrag(false); handleFiles(Array.from(e.dataTransfer.files))
     }, [handleFiles])
 
-    // ── Delete image ──────────────────────────────────────────────────────
-    const handleDeleteImg = async (img: GhFile) => {
-        if (!confirm(`Delete "${img.name}"?`)) return
-        try {
-            await ops.deleteImage(img)
-            showStatus('success', successMsg(`Deleted "${img.name}".`))
-            setImages(prev => prev.filter(f => f.sha !== img.sha))
-            setCatCounts(prev => ({ ...prev, [selectedCat!]: Math.max(0, (prev[selectedCat!] ?? 1) - 1) }))
-            if (previewImg?.sha === img.sha) setPreviewImg(null)
-        } catch (err) { showStatus('error', `Delete failed: ${(err as Error).message}`) }
+    // ── Stage: Delete image ───────────────────────────────────────────────
+    const handleDeleteImg = (img: GhFile) => {
+        if (!selectedCat) return
+        // If this image was a pending upload — just remove that pending change instead
+        const uploadIdx = pendingChanges.findIndex(
+            c => c.type === 'upload' && c.cat === selectedCat && c.file.name === img.name
+        )
+        if (uploadIdx !== -1) {
+            const change = pendingChanges[uploadIdx] as Extract<PendingChange, { type: 'upload' }>
+            URL.revokeObjectURL(change.previewUrl)
+            setPendingChanges(prev => prev.filter((_, i) => i !== uploadIdx))
+            showStatus('info', `Removed staged upload "${img.name}".`)
+            return
+        }
+        setPendingChanges(prev => [...prev, { type: 'delete', img, cat: selectedCat }])
+        showStatus('info', `"${img.name}" staged for deletion. Commit & Publish to apply.`)
     }
 
-    // ── Delete category ───────────────────────────────────────────────────
-    const handleDeleteCategory = async (cat: string) => {
-        if (!confirm(`Delete category "${cat}" and all its contents?`)) return
-        try {
-            await ops.deleteCategory(cat)
-            showStatus('success', successMsg(`Deleted category "${cat}".`))
-            await loadCategories()
-        } catch (err) { showStatus('error', `Delete category failed: ${(err as Error).message}`) }
-    }
-
-    // ── Move image ────────────────────────────────────────────────────────
-    const handleMoveConfirm = async () => {
+    // ── Stage: Move image ─────────────────────────────────────────────────
+    const handleMoveConfirm = () => {
         if (!moveImg || !moveDest || moveDest === selectedCat) { setMoveImg(null); return }
-        try {
-            await ops.moveImage(moveImg, selectedCat!, moveDest)
-            showStatus('success', successMsg(`Moved "${moveImg.name}" → ${moveDest}.`))
-            setImages(prev => prev.filter(f => f.sha !== moveImg.sha))
-            setCatCounts(prev => ({ ...prev, [selectedCat!]: Math.max(0, (prev[selectedCat!] ?? 1) - 1) }))
-        } catch (err) { showStatus('error', `Move failed: ${(err as Error).message}`) }
-        finally { setMoveImg(null); setMoveDest('') }
+        setPendingChanges(prev => [...prev, { type: 'move', img: moveImg, fromCat: selectedCat!, toCat: moveDest }])
+        showStatus('info', `"${moveImg.name}" staged to move → ${moveDest}. Commit & Publish to apply.`)
+        setMoveImg(null); setMoveDest('')
     }
 
-    // ── New category ──────────────────────────────────────────────────────
-    const handleCreateCat = async () => {
+    // ── Stage: Create category ────────────────────────────────────────────
+    const handleCreateCat = () => {
         const name = newCatName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
-        if (!name) return
-        try {
-            await ops.createCategory(name)
-            setNewCatName('')
-            showStatus('success', `Category "${name}" created.`)
-            await loadCategories(name)
-        } catch (err) { showStatus('error', `Create failed: ${(err as Error).message}`) }
+        if (!name || categories.includes(name)) return
+        setCategories(prev => [...prev, name].sort())
+        setNewCatName('')
+        setPendingChanges(prev => [...prev, { type: 'create-cat', name }])
+        showStatus('info', `Category "${name}" staged. Commit & Publish to create it.`)
+    }
+
+    // ── Stage: Delete category ────────────────────────────────────────────
+    const handleDeleteCategory = (cat: string) => {
+        if (!confirm(`Stage deletion of category "${cat}" and all its contents?\nThis will be applied when you Commit & Publish.`)) return
+        setCategories(prev => prev.filter(c => c !== cat))
+        if (selectedCat === cat) setSelectedCat(categories.find(c => c !== cat) || null)
+        setPendingChanges(prev => {
+            // Remove any pending changes for this category (they're moot now)
+            const filtered = prev.filter(c => {
+                if (c.type === 'upload' && c.cat === cat) { URL.revokeObjectURL(c.previewUrl); return false }
+                if (c.type === 'delete' && c.cat === cat) return false
+                if (c.type === 'move' && (c.fromCat === cat || c.toCat === cat)) return false
+                if (c.type === 'create-cat' && c.name === cat) return false
+                return true
+            })
+            return [...filtered, { type: 'delete-cat', name: cat }]
+        })
+        showStatus('info', `Category "${cat}" staged for deletion. Commit & Publish to apply.`)
+    }
+
+    // ── Discard all pending changes ───────────────────────────────────────
+    const handleDiscard = () => {
+        if (!confirm(`Discard all ${pendingChanges.length} pending change(s)?\nThis cannot be undone.`)) return
+        pendingChanges.forEach(c => { if (c.type === 'upload') URL.revokeObjectURL(c.previewUrl) })
+        setPendingChanges([])
+        // Reload categories/images to restore any optimistic UI changes
+        loadCategories()
+        if (selectedCat) loadImages(selectedCat)
+        showStatus('info', 'All pending changes discarded.')
+    }
+
+    // ── Publish all ───────────────────────────────────────────────────────
+    const publishAll = async () => {
+        if (!pendingChanges.length) return
+        setPublishing(true)
+        let total = pendingChanges.length
+        let done = 0
+        let errors = 0
+
+        const ordered: PendingChange[] = [
+            ...pendingChanges.filter(c => c.type === 'create-cat'),
+            ...pendingChanges.filter(c => c.type === 'upload'),
+            ...pendingChanges.filter(c => c.type === 'move'),
+            ...pendingChanges.filter(c => c.type === 'delete'),
+            ...pendingChanges.filter(c => c.type === 'delete-cat'),
+        ]
+        total = ordered.length
+
+        for (const change of ordered) {
+            const label =
+                change.type === 'upload' ? change.file.name :
+                    change.type === 'delete' ? change.img.name :
+                        change.type === 'move' ? change.img.name :
+                            change.name
+            setProgress({ done, total, current: label })
+            try {
+                if (change.type === 'create-cat') await ops.createCategory(change.name)
+                else if (change.type === 'upload') await ops.uploadImage(change.cat, change.file)
+                else if (change.type === 'move') await ops.moveImage(change.img, change.fromCat, change.toCat)
+                else if (change.type === 'delete') await ops.deleteImage(change.img)
+                else if (change.type === 'delete-cat') await ops.deleteCategory(change.name)
+            } catch (err) {
+                errors++
+                showStatus('error', `${label}: ${(err as Error).message}`)
+            }
+            done++
+        }
+
+        // Revoke any object URLs
+        pendingChanges.forEach(c => { if (c.type === 'upload') URL.revokeObjectURL(c.previewUrl) })
+        setPendingChanges([])
+        setProgress(null)
+        setPublishing(false)
+
+        const rebuild = IS_DEV ? 'Commit & push to deploy.' : 'CI rebuild triggered (~3 min).'
+        if (errors === 0) {
+            showStatus('success', `All ${total} change(s) published. ${rebuild}`)
+        } else {
+            showStatus('error', `${total - errors}/${total} change(s) published. ${errors} failed.`)
+        }
+
+        // Refresh data
+        await loadCategories()
+        if (selectedCat) await loadImages(selectedCat)
     }
 
     // ── Keyboard shortcuts ────────────────────────────────────────────────
@@ -391,14 +522,14 @@ export default function Admin() {
         const handler = (e: KeyboardEvent) => {
             if (e.key === 'Escape') { setPreviewImg(null); setMoveImg(null) }
             if (previewImg) {
-                const i = images.findIndex(f => f.sha === previewImg.sha)
-                if (e.key === 'ArrowRight' && i < images.length - 1) setPreviewImg(images[i + 1])
-                if (e.key === 'ArrowLeft' && i > 0) setPreviewImg(images[i - 1])
+                const i = virtualImages.findIndex(v => v.name === previewImg.name)
+                if (e.key === 'ArrowRight' && i < virtualImages.length - 1) setPreviewImg(virtualImages[i + 1])
+                if (e.key === 'ArrowLeft' && i > 0) setPreviewImg(virtualImages[i - 1])
             }
         }
         window.addEventListener('keydown', handler)
         return () => window.removeEventListener('keydown', handler)
-    }, [previewImg, images])
+    }, [previewImg, virtualImages])
 
     // ── LOGIN ─────────────────────────────────────────────────────────────
     if (!authed) return (
@@ -439,13 +570,16 @@ export default function Admin() {
             {/* ── Lightbox ── */}
             {previewImg && (
                 <div style={s.lbOverlay} onClick={() => setPreviewImg(null)}>
-                    <img src={previewImg.download_url} alt={previewImg.name} style={s.lbImg}
-                        onClick={e => e.stopPropagation()} />
+                    <img
+                        src={previewImg.previewUrl || previewImg.ghFile?.download_url || ''}
+                        alt={previewImg.name} style={s.lbImg} onClick={e => e.stopPropagation()} />
                     <div style={s.lbBar} onClick={e => e.stopPropagation()}>
                         <span style={{ color: '#666', fontSize: '0.76rem' }}>{previewImg.name}</span>
-                        <button style={s.btnSm} onClick={() => { const i = images.findIndex(f => f.sha === previewImg.sha); if (i > 0) setPreviewImg(images[i - 1]) }}>‹</button>
-                        <button style={s.btnSm} onClick={() => { const i = images.findIndex(f => f.sha === previewImg.sha); if (i < images.length - 1) setPreviewImg(images[i + 1]) }}>›</button>
-                        <button style={s.btnDanger} onClick={() => { setPreviewImg(null); handleDeleteImg(previewImg) }}>Delete</button>
+                        <button style={s.btnSm} onClick={() => { const i = virtualImages.findIndex(v => v.name === previewImg.name); if (i > 0) setPreviewImg(virtualImages[i - 1]) }}>‹</button>
+                        <button style={s.btnSm} onClick={() => { const i = virtualImages.findIndex(v => v.name === previewImg.name); if (i < virtualImages.length - 1) setPreviewImg(virtualImages[i + 1]) }}>›</button>
+                        {previewImg.ghFile && previewImg.pendingStatus !== 'delete' && (
+                            <button style={s.btnDanger} onClick={() => { setPreviewImg(null); handleDeleteImg(previewImg.ghFile!) }}>Stage Delete</button>
+                        )}
                         <button style={s.btnGhost} onClick={() => setPreviewImg(null)}>✕ Close</button>
                     </div>
                     <p style={{ color: '#333', fontSize: '0.68rem', marginTop: 8 }}>← → keys · Esc to close</p>
@@ -462,7 +596,7 @@ export default function Admin() {
                             {categories.filter(c => c !== selectedCat).map(c => <option key={c} value={c}>{c}</option>)}
                         </select>
                         <div style={{ display: 'flex', gap: 8 }}>
-                            <button style={{ ...s.btnAccent, flex: 1 }} onClick={handleMoveConfirm} disabled={!moveDest}>Move</button>
+                            <button style={{ ...s.btnAccent, flex: 1 }} onClick={handleMoveConfirm} disabled={!moveDest}>Stage Move</button>
                             <button style={s.btnGhost} onClick={() => setMoveImg(null)}>Cancel</button>
                         </div>
                     </div>
@@ -483,7 +617,7 @@ export default function Admin() {
                             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textTransform: 'capitalize' }}>{cat}</span>
                             <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
                                 {catCounts[cat] !== undefined && <span style={s.catBadge}>{catCounts[cat]}</span>}
-                                <button className="cat-del" style={s.catDeleteBtn} title="Delete category"
+                                <button className="cat-del" style={s.catDeleteBtn} title="Stage category deletion"
                                     onClick={e => { e.stopPropagation(); handleDeleteCategory(cat) }}>✕</button>
                             </div>
                         </div>
@@ -506,15 +640,32 @@ export default function Admin() {
 
             {/* ── Main ── */}
             <main style={s.main}>
+                {/* Toolbar */}
                 <div style={s.toolbar}>
                     <p style={s.toolbarTitle}>{selectedCat ?? 'Select a category'}</p>
                     {IS_DEV && <span style={s.devBadge}>🖥 Local</span>}
                     {!IS_DEV && !PAT && <span style={{ color: '#f59e0b', fontSize: '0.75rem' }}>⚠ PAT not set</span>}
                     {progress && <span style={{ fontSize: '0.76rem', color: C.muted }}>{progress.done}/{progress.total} — {progress.current}</span>}
-                    <button style={s.btnSm} onClick={() => fileInputRef.current?.click()} disabled={!selectedCat || !!progress}>↑ Upload</button>
+                    <button style={s.btnSm} onClick={() => fileInputRef.current?.click()} disabled={!selectedCat || publishing}>↑ Upload</button>
                     <input ref={fileInputRef} type="file" accept="image/*" multiple style={{ display: 'none' }}
                         onChange={e => e.target.files && handleFiles(Array.from(e.target.files))} />
                 </div>
+
+                {/* Pending changes bar */}
+                {pendingChanges.length > 0 && (
+                    <div style={s.pendingBar}>
+                        <span style={{ fontSize: '0.8rem', color: C.accent, fontWeight: 600 }}>
+                            ⏳ {pendingChanges.length} pending change{pendingChanges.length !== 1 ? 's' : ''}
+                        </span>
+                        <span style={{ flex: 1 }} />
+                        <button style={s.btnGhost} onClick={handleDiscard} disabled={publishing}>↩ Discard all</button>
+                        <button style={s.btnPublish} onClick={publishAll} disabled={publishing}>
+                            {publishing
+                                ? <><span style={s.spinner} />Publishing…</>
+                                : <>✓ Commit &amp; Publish</>}
+                        </button>
+                    </div>
+                )}
 
                 {progress && <div style={s.progressBar(uploadPct)} />}
                 {status && <div style={s.status(status.type)}>{status.msg}</div>}
@@ -535,16 +686,32 @@ export default function Admin() {
                     </p>
                 ) : (
                     <div style={s.imageGrid}>
-                        {!images.length && selectedCat && <p style={s.empty}>No images in "{selectedCat}" yet. Upload some above.</p>}
-                        {images.map(img => (
-                            <div key={img.sha} className="img-card" style={s.imageCard} onClick={() => setPreviewImg(img)}>
-                                <img src={img.download_url} alt={img.name} style={s.imageThumb} loading="lazy" />
-                                <div className="img-overlay" style={s.imageOverlay}>
-                                    <span style={s.imageName}>{img.name}</span>
-                                    <div style={s.imageActions} onClick={e => e.stopPropagation()}>
-                                        <button style={s.btnSm} onClick={() => { setMoveImg(img); setMoveDest('') }}>Move</button>
-                                        <button style={s.btnDanger} onClick={() => handleDeleteImg(img)}>Delete</button>
+                        {!virtualImages.length && selectedCat && <p style={s.empty}>No images in "{selectedCat}" yet. Upload some above.</p>}
+                        {virtualImages.map((vimg, idx) => (
+                            <div key={vimg.name + idx} className="img-card"
+                                style={s.imageCard(vimg.pendingStatus)}
+                                onClick={() => vimg.pendingStatus !== 'delete' && setPreviewImg(vimg)}>
+                                <img
+                                    src={vimg.previewUrl || vimg.ghFile?.download_url || ''}
+                                    alt={vimg.name} style={s.imageThumb} loading="lazy" />
+                                {/* Pending status badge */}
+                                {vimg.pendingStatus && (
+                                    <div style={s.pendingBadge(vimg.pendingStatus)}>
+                                        {vimg.pendingStatus === 'upload' ? 'NEW' :
+                                            vimg.pendingStatus === 'delete' ? 'DELETE' :
+                                                vimg.moveLabel || 'MOVE'}
                                     </div>
+                                )}
+                                <div className="img-overlay" style={s.imageOverlay}>
+                                    <span style={s.imageName}>{vimg.name}</span>
+                                    {vimg.pendingStatus !== 'delete' && vimg.pendingStatus !== 'move-out' && (
+                                        <div style={s.imageActions} onClick={e => e.stopPropagation()}>
+                                            {vimg.ghFile && <button style={s.btnSm} onClick={() => { setMoveImg(vimg.ghFile!); setMoveDest('') }}>Move</button>}
+                                            <button style={s.btnDanger} onClick={() => vimg.ghFile && handleDeleteImg(vimg.ghFile)}>
+                                                {vimg.pendingStatus === 'upload' ? 'Remove' : 'Delete'}
+                                            </button>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
                         ))}
