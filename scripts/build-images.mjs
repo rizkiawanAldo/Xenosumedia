@@ -34,13 +34,14 @@ function isImage(file) {
 
 /**
  * Process a single image file: generate WebP thumbnails (skipping any that
- * already exist on disk) and return the thumb URL map.
+ * already exist on disk) and return the thumb URL map + aspect ratio.
  */
 async function processImage(file) {
   const baseName = path.basename(file, path.extname(file))
   const urls = {}
   let generated = 0
   let skipped = 0
+  let aspectRatio = null
 
   for (const w of WIDTHS) {
     const outPath = path.join(OUT_DIR, `${baseName}-${w}.webp`)
@@ -56,6 +57,11 @@ async function processImage(file) {
       urls._buffer = await fs.readFile(file)
       const meta = await sharp(urls._buffer).metadata()
       urls._width = meta.width || 2000
+      urls._height = meta.height || 1333
+      // Capture aspect ratio from the source image
+      if (meta.width && meta.height) {
+        aspectRatio = Math.round((meta.width / meta.height) * 10000) / 10000
+      }
     }
 
     const target = Math.min(urls._width, w)
@@ -68,17 +74,29 @@ async function processImage(file) {
     generated++
   }
 
+  // If all thumbs were cached, we didn't read the file — read metadata now to get aspect ratio
+  if (aspectRatio === null) {
+    try {
+      const meta = await sharp(file).metadata()
+      if (meta.width && meta.height) {
+        aspectRatio = Math.round((meta.width / meta.height) * 10000) / 10000
+      }
+    } catch { /* ignore */ }
+  }
+
   // Clean up internal keys
   delete urls._buffer
   delete urls._width
+  delete urls._height
 
   const status = generated > 0
     ? `✓ generated ${generated}, skipped ${skipped}`
     : `↩ all cached (${skipped} thumbs)`
   console.log(`  ${status}: ${path.relative(ROOT, file)}`)
 
-  return urls
+  return { urls, aspectRatio }
 }
+
 
 async function build() {
   const manifest = {}
@@ -90,7 +108,7 @@ async function build() {
     if (!isImage(file)) continue
 
     const relFromSrc = '/' + path.relative(path.join(ROOT, 'src'), file).replace(/\\/g, '/')
-    const urls = await processImage(file)
+    const { urls, aspectRatio } = await processImage(file)
 
     const prodSrc = `/assets/${path.basename(file)}`
     const srcset = `${urls[400]} 400w, ${urls[800]} 800w, ${urls[1200]} 1200w`
@@ -98,10 +116,12 @@ async function build() {
     // Production paths (used in the built site)
     manifest[prodSrc] = urls[800] || urls[1200]
     manifest[prodSrc + '__srcset'] = srcset
+    if (aspectRatio !== null) manifest[prodSrc + '__ar'] = aspectRatio
 
     // Dev paths (used by Vite dev server, which serves from /src/)
     manifest['/src' + relFromSrc] = urls[800] || urls[1200]
     manifest['/src' + relFromSrc + '__srcset'] = srcset
+    if (aspectRatio !== null) manifest['/src' + relFromSrc + '__ar'] = aspectRatio
   }
 
   console.log('Processing banners…')
@@ -109,15 +129,17 @@ async function build() {
     if (!isImage(file)) continue
 
     const relFromSrc = '/' + path.relative(path.join(ROOT, 'src'), file).replace(/\\/g, '/')
-    const urls = await processImage(file)
+    const { urls, aspectRatio } = await processImage(file)
 
     const prodSrc = `/assets/${path.basename(file)}`
     const srcset = `${urls[400]} 400w, ${urls[800]} 800w, ${urls[1200]} 1200w`
 
     manifest[prodSrc] = urls[800] || urls[1200]
     manifest[prodSrc + '__srcset'] = srcset
+    if (aspectRatio !== null) manifest[prodSrc + '__ar'] = aspectRatio
     manifest['/src' + relFromSrc] = urls[800] || urls[1200]
     manifest['/src' + relFromSrc + '__srcset'] = srcset
+    if (aspectRatio !== null) manifest['/src' + relFromSrc + '__ar'] = aspectRatio
   }
 
   await fs.writeFile(MANIFEST_PATH, JSON.stringify(manifest, null, 2), 'utf8')

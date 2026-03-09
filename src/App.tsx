@@ -105,68 +105,44 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
   const [ref, width] = useContainerWidth<HTMLDivElement>()
   const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
 
-  // Load images with default aspect ratios immediately, then calculate real ones
   useEffect(() => {
-    // Set default aspect ratios immediately so gallery shows up
-    const defaultItems: JustifiedItem[] = items.map((it, i) => ({
-      ...it,
-      aspectRatio: 1.5, // Default aspect ratio
-      __globalIndex: i
-    } as JustifiedItem & { __globalIndex?: number }))
+    // --- Fast path: use aspect ratios baked into the manifest at build time ---
+    // This avoids firing any extra network requests just to measure image dimensions.
+    const itemsWithBakedRatios: JustifiedItem[] = items.map((it, i) => {
+      const filename = it.src.split('/').pop() || ''
+      const arKey = `/assets/${filename}__ar`
+      const bakedAr = thumbsByOriginal[arKey]
+      const aspectRatio = bakedAr ? Math.max(0.3, Math.min(3.5, Number(bakedAr))) : 1.5
+      const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
+        ; (e as any).__globalIndex = i
+      return e
+    })
 
-    setWithRatios(defaultItems)
+    setWithRatios(itemsWithBakedRatios)
 
-    // Then calculate real aspect ratios in the background
+    // --- Fallback: async-probe any images that are missing a baked ratio ---
+    // In practice this should be empty after running build-images.
+    const missing = itemsWithBakedRatios
+      .map((it, i) => ({ it, i }))
+      .filter(({ it }) => (it as any).__globalIndex !== undefined && it.aspectRatio === 1.5 && !thumbsByOriginal[`/assets/${it.src.split('/').pop()}__ar`])
+
+    if (missing.length === 0) return
+
     let cancelled = false
       ; (async () => {
-        const enriched: JustifiedItem[] = new Array(items.length)
-
-        // Load aspect ratios with moderate concurrency
-        const concurrency = 8
-        const queue: Promise<void>[] = []
-        let nextIndex = 0
-
-        async function worker() {
-          while (true) {
-            const i = nextIndex++
-            if (i >= items.length) break
-            const it = items[i]
-
-            // Use thumbnail for aspect ratio calculation if available
-            const thumb = findThumbnail(it.src, thumbsByOriginal)
-            const srcForAspect = thumb || it.src
-
+        const enriched = [...itemsWithBakedRatios]
+        await Promise.all(
+          missing.map(async ({ it, i }) => {
             try {
-              const ratio = await loadImageAspect(srcForAspect)
-              // Use actual aspect ratio without randomization
+              const thumb = findThumbnail(it.src, thumbsByOriginal)
+              const ratio = await loadImageAspect(thumb || it.src)
               const aspectRatio = Math.max(0.3, Math.min(3.5, ratio))
-              const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
-                ; (e as any).__globalIndex = i
-              enriched[i] = e
-
-              // Update state progressively for first few images to show improvement
-              if (i < 15 && !cancelled) {
-                const currentItems = [...defaultItems]
-                for (let j = 0; j <= i; j++) {
-                  if (enriched[j]) {
-                    currentItems[j] = enriched[j]
-                  }
-                }
-                setWithRatios(currentItems)
-              }
-            } catch (error) {
-              // Keep default aspect ratio if loading fails
-              enriched[i] = defaultItems[i]
-            }
-          }
-        }
-
-        for (let c = 0; c < concurrency; c++) queue.push(worker())
-        await Promise.all(queue)
-
-        if (!cancelled) {
-          setWithRatios(enriched)
-        }
+              enriched[i] = { ...it, aspectRatio } as JustifiedItem
+                ; (enriched[i] as any).__globalIndex = i
+            } catch { /* keep default */ }
+          })
+        )
+        if (!cancelled) setWithRatios(enriched)
       })()
 
     return () => { cancelled = true }
@@ -313,14 +289,17 @@ function App() {
   const base = import.meta.env.BASE_URL
   // Prefix all manifest paths with the app base so they resolve correctly
   // on subdirectory deploys like GitHub Pages (/Xenosumedia/).
-  // Values are either a plain URL (/thumbs/x.webp) or a srcset string
-  // (/thumbs/x-400.webp 400w, /thumbs/x-800.webp 800w, ...).
+  // Values are either a plain URL (/thumbs/x.webp), a srcset string, or a
+  // numeric aspect ratio (__ar entries). Only rewrite string URL values.
   const thumbsManifest: Record<string, string> = Object.fromEntries(
-    Object.entries(thumbsManifestData).map(([k, v]) => [
+    Object.entries(thumbsManifestData as Record<string, string | number>).map(([k, v]) => [
       k,
-      // Rewrite every absolute path (starting with /) to include the app base.
-      // Handles both plain URLs and srcset strings with multiple entries.
-      v.replace(/(^|,\s*)\//g, `$1${base}`),
+      typeof v === 'number'
+        // Keep __ar values as plain strings (no path rewriting needed)
+        ? String(v)
+        // Rewrite every absolute path (starting with /) to include the app base.
+        // Handles both plain URLs and srcset strings with multiple entries.
+        : (v as string).replace(/(^|,\s*)\//g, `$1${base}`),
     ])
   )
 
