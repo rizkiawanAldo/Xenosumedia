@@ -193,6 +193,30 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
     return () => io.disconnect()
   }, [rows.length])
 
+  // After the initial paint settles, mount ALL remaining rows during idle time.
+  // This ensures fast-scrollers (who scroll within ~1s of landing) never hit
+  // empty placeholder rows — everything is ready before they get there.
+  useEffect(() => {
+    if (rows.length === 0) return
+    const mountAll = () => {
+      setMountedRows(prev => {
+        if (prev.size >= rows.length) return prev // already complete
+        const next = new Set(prev)
+        for (let i = 0; i < rows.length; i++) next.add(i)
+        return next
+      })
+    }
+    // requestIdleCallback fires after first paint when the browser is free;
+    // fallback to setTimeout for browsers that don't support it (Safari <16).
+    const ric = typeof requestIdleCallback !== 'undefined'
+      ? requestIdleCallback(mountAll, { timeout: 1500 })
+      : setTimeout(mountAll, 800) as unknown as number
+    return () => {
+      if (typeof cancelIdleCallback !== 'undefined') cancelIdleCallback(ric)
+      else clearTimeout(ric)
+    }
+  }, [rows.length])
+
   return (
     <div ref={ref} className="jg">
       {rows.map((row, ri) => {
