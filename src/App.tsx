@@ -238,8 +238,8 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
             }}
           >
             {isMounted && row.items.map(({ item, width: w, height: h, globalIndex }) => {
-              // Always use the smallest (400w) thumbnail in the grid — speed over quality
-              const displaySrc = getThumbnail400(item.src, thumbsByOriginal)
+              // Use 800w thumbnail in the grid — good quality WebP, still much smaller than originals
+              const displaySrc = findThumbnail(item.src, thumbsByOriginal) || item.src
               const isPriorityRow = ri < Math.max(0, eagerRowCount || 0)
               const loading = isPriorityRow ? 'eager' : 'lazy'
               const fetchPriority = isPriorityRow ? 'high' : 'low'
@@ -342,25 +342,6 @@ function findThumbnail(src: string, thumbsManifest: Record<string, string>): str
   return thumbsManifest[manifestKey]
 }
 
-// Returns the smallest (400w) thumbnail — used for grid tiles where speed > quality
-function getThumbnail400(src: string, thumbsManifest: Record<string, string>): string {
-  const filename = stripViteHash(src.split('/').pop() || '')
-  const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
-  const url = srcSet?.split(',')[0]?.trim().split(' ')[0]
-  return url || thumbsManifest[`/assets/${filename}`] || src
-}
-
-// Returns the largest (1200w) thumbnail — used for the lightbox where quality matters
-function getThumbnail1200(src: string, thumbsManifest: Record<string, string>): string {
-  const filename = stripViteHash(src.split('/').pop() || '')
-  const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
-  if (srcSet) {
-    const parts = srcSet.split(',')
-    const url = parts[parts.length - 1]?.trim().split(' ')[0]
-    if (url) return url
-  }
-  return thumbsManifest[`/assets/${filename}`] || src
-}
 
 // Load image aspect ratio efficiently
 function loadImageAspect(src: string): Promise<number> {
@@ -381,11 +362,10 @@ function loadImageAspect(src: string): Promise<number> {
 }
 
 function LightboxView({
-  index, images, thumbsManifest, exif, setExif, onClose, onPrev, onNext
+  index, images, exif, setExif, onClose, onPrev, onNext
 }: {
   index: number
   images: ImageItem[]
-  thumbsManifest: Record<string, string>
   exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null
   setExif: (v: any) => void
   onClose: () => void
@@ -393,15 +373,15 @@ function LightboxView({
   onNext: () => void
 }) {
   const current = images[index]
-  // Use 1200w thumbnail for the lightbox — great quality, fast to load
-  const src1200 = getThumbnail1200(current.src, thumbsManifest)
+  // Use the original full-resolution image in the lightbox for maximum quality
+  const fullSrc = current.src
 
-  // Preload adjacent images so swiping feels instant
+  // Preload adjacent original images so swiping feels instant
   useEffect(() => {
     const n = images.length
     const adjacentSrcs = [
-      getThumbnail1200(images[(index + 1) % n].src, thumbsManifest),
-      getThumbnail1200(images[(index + n - 1) % n].src, thumbsManifest),
+      images[(index + 1) % n].src,
+      images[(index + n - 1) % n].src,
     ]
     const imgs = adjacentSrcs.map(s => {
       const img = new Image()
@@ -411,7 +391,7 @@ function LightboxView({
       return img
     })
     return () => { imgs.forEach(img => { img.src = '' }) }
-  }, [index, images, thumbsManifest])
+  }, [index, images])
 
   return (
     <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
@@ -420,9 +400,9 @@ function LightboxView({
       <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
         <div className="jg-shimmer" aria-hidden="true" />
         <img
-          key={src1200}
+          key={fullSrc}
           className="lightbox-image"
-          src={src1200}
+          src={fullSrc}
           alt={current.alt}
           decoding="async"
           fetchPriority="high"
@@ -715,7 +695,6 @@ function App() {
         <LightboxView
           index={lightboxIndex}
           images={allImages}
-          thumbsManifest={thumbsManifest}
           exif={exif}
           setExif={setExif}
           onClose={closeLightbox}
