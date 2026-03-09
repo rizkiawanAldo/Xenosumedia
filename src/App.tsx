@@ -328,16 +328,23 @@ function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: numb
 }
 
 
+// Vite appends a content hash to asset filenames in production builds
+// e.g. "photo-CvlBJBQ9.jpg" → "photo.jpg"
+// The manifest uses the original unhashed names, so we must strip the hash first.
+function stripViteHash(filename: string): string {
+  return filename.replace(/-[A-Za-z0-9_]{8}(\.[^.]+)$/, '$1')
+}
+
 // Simple thumbnail lookup function
 function findThumbnail(src: string, thumbsManifest: Record<string, string>): string | undefined {
-  const filename = src.split('/').pop() || ''
+  const filename = stripViteHash(src.split('/').pop() || '')
   const manifestKey = `/assets/${filename}`
   return thumbsManifest[manifestKey]
 }
 
 // Returns the smallest (400w) thumbnail — used for grid tiles where speed > quality
 function getThumbnail400(src: string, thumbsManifest: Record<string, string>): string {
-  const filename = src.split('/').pop() || ''
+  const filename = stripViteHash(src.split('/').pop() || '')
   const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
   const url = srcSet?.split(',')[0]?.trim().split(' ')[0]
   return url || thumbsManifest[`/assets/${filename}`] || src
@@ -345,7 +352,7 @@ function getThumbnail400(src: string, thumbsManifest: Record<string, string>): s
 
 // Returns the largest (1200w) thumbnail — used for the lightbox where quality matters
 function getThumbnail1200(src: string, thumbsManifest: Record<string, string>): string {
-  const filename = src.split('/').pop() || ''
+  const filename = stripViteHash(src.split('/').pop() || '')
   const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
   if (srcSet) {
     const parts = srcSet.split(',')
