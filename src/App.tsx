@@ -214,12 +214,8 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
             }}
           >
             {isMounted && row.items.map(({ item, width: w, height: h, globalIndex }) => {
-              const thumb = findThumbnail(item.src, thumbsByOriginal)
-              const displaySrc = thumb || item.src
-              const filename = item.src.split('/').pop() || ''
-              const srcSetKey = `/assets/${filename}__srcset`
-              const srcSet = thumbsByOriginal[srcSetKey]
-              const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
+              // Always use the smallest (400w) thumbnail in the grid — speed over quality
+              const displaySrc = getThumbnail400(item.src, thumbsByOriginal)
               const isPriorityRow = ri < Math.max(0, eagerRowCount || 0)
               const loading = isPriorityRow ? 'eager' : 'lazy'
               const fetchPriority = isPriorityRow ? 'high' : 'low'
@@ -238,8 +234,6 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
                       decoding="async"
                       fetchPriority={fetchPriority as any}
                       src={displaySrc}
-                      srcSet={srcSet}
-                      sizes={sizes}
                       alt={item.alt}
                       width={w}
                       height={h}
@@ -317,6 +311,26 @@ function findThumbnail(src: string, thumbsManifest: Record<string, string>): str
   return thumbsManifest[manifestKey]
 }
 
+// Returns the smallest (400w) thumbnail — used for grid tiles where speed > quality
+function getThumbnail400(src: string, thumbsManifest: Record<string, string>): string {
+  const filename = src.split('/').pop() || ''
+  const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
+  const url = srcSet?.split(',')[0]?.trim().split(' ')[0]
+  return url || thumbsManifest[`/assets/${filename}`] || src
+}
+
+// Returns the largest (1200w) thumbnail — used for the lightbox where quality matters
+function getThumbnail1200(src: string, thumbsManifest: Record<string, string>): string {
+  const filename = src.split('/').pop() || ''
+  const srcSet = thumbsManifest[`/assets/${filename}__srcset`]
+  if (srcSet) {
+    const parts = srcSet.split(',')
+    const url = parts[parts.length - 1]?.trim().split(' ')[0]
+    if (url) return url
+  }
+  return thumbsManifest[`/assets/${filename}`] || src
+}
+
 // Load image aspect ratio efficiently
 function loadImageAspect(src: string): Promise<number> {
   return new Promise((resolve) => {
@@ -333,6 +347,67 @@ function loadImageAspect(src: string): Promise<number> {
     img.fetchPriority = 'low' as any
     img.src = src
   })
+}
+
+function LightboxView({
+  index, images, thumbsManifest, exif, setExif, onClose, onPrev, onNext
+}: {
+  index: number
+  images: ImageItem[]
+  thumbsManifest: Record<string, string>
+  exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null
+  setExif: (v: any) => void
+  onClose: () => void
+  onPrev: () => void
+  onNext: () => void
+}) {
+  const current = images[index]
+  // Use 1200w thumbnail for the lightbox — great quality, fast to load
+  const src1200 = getThumbnail1200(current.src, thumbsManifest)
+
+  // Preload adjacent images so swiping feels instant
+  useEffect(() => {
+    const n = images.length
+    const adjacentSrcs = [
+      getThumbnail1200(images[(index + 1) % n].src, thumbsManifest),
+      getThumbnail1200(images[(index + n - 1) % n].src, thumbsManifest),
+    ]
+    const imgs = adjacentSrcs.map(s => {
+      const img = new Image()
+      img.fetchPriority = 'low'
+      img.decoding = 'async'
+      img.src = s
+      return img
+    })
+    return () => { imgs.forEach(img => { img.src = '' }) }
+  }, [index, images, thumbsManifest])
+
+  return (
+    <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
+      <button className="lightbox-close" aria-label="Close" onClick={onClose}>×</button>
+      <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); onPrev() }}>‹</button>
+      <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
+        <div className="jg-shimmer" aria-hidden="true" />
+        <img
+          key={src1200}
+          className="lightbox-image"
+          src={src1200}
+          alt={current.alt}
+          decoding="async"
+          fetchPriority="high"
+          onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+          onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+        />
+      </div>
+      <ExifPanel
+        key={current.src}
+        src={current.src}
+        exif={exif}
+        setExif={setExif}
+      />
+      <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); onNext() }}>›</button>
+    </div>
+  )
 }
 
 function App() {
@@ -606,30 +681,16 @@ function App() {
       </main>
 
       {lightboxIndex !== null && (
-        <div className="lightbox" role="dialog" aria-modal="true" onClick={closeLightbox}>
-          <button className="lightbox-close" aria-label="Close" onClick={closeLightbox}>×</button>
-          <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); showPrev(); }}>‹</button>
-          <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-            <div className="jg-shimmer" aria-hidden="true" />
-            <img
-              className="lightbox-image"
-              src={allImages[lightboxIndex].src}
-              alt={allImages[lightboxIndex].alt}
-              decoding="async"
-              fetchPriority="high"
-              onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-              onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-            />
-          </div>
-          {/* EXIF on-demand */}
-          <ExifPanel
-            key={allImages[lightboxIndex].src}
-            src={allImages[lightboxIndex].src}
-            exif={exif}
-            setExif={setExif}
-          />
-          <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); showNext(); }}>›</button>
-        </div>
+        <LightboxView
+          index={lightboxIndex}
+          images={allImages}
+          thumbsManifest={thumbsManifest}
+          exif={exif}
+          setExif={setExif}
+          onClose={closeLightbox}
+          onPrev={() => { showPrev() }}
+          onNext={() => { showNext() }}
+        />
       )}
 
       <footer className="site-footer">
