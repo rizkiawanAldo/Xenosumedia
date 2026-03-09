@@ -100,6 +100,9 @@ function computeRows(
   return rows
 }
 
+// How many rows to always keep mounted regardless of scroll position (for LCP)
+const ALWAYS_MOUNT_ROWS = 3
+
 function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { items: ImageItem[], onOpen: (globalIndex: number) => void, thumbsByOriginal: Record<string, string>, eagerRowCount: number }) {
   const gap = 14
   const [ref, width] = useContainerWidth<HTMLDivElement>()
@@ -151,65 +154,112 @@ function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { 
   const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
   const rows = useMemo(() => computeRows(withRatios, width, gap, baseRowHeight), [withRatios, width, gap, baseRowHeight])
 
-  // Render all rows (no virtualization) so images across categories load simultaneously
-  const startIndex = 0
-  const endIndex = rows.length
+  // ── Row virtualization ────────────────────────────────────────────────────
+  // Progressive mounting: start with the first N rows, mount more as the user
+  // scrolls. Once a row is mounted it stays mounted (no teardown flicker).
+  const [mountedRows, setMountedRows] = useState<Set<number>>(
+    () => new Set(Array.from({ length: ALWAYS_MOUNT_ROWS }, (_, i) => i))
+  )
+
+  // Reset when the item list changes (e.g., new photos added)
+  useEffect(() => {
+    setMountedRows(new Set(Array.from({ length: ALWAYS_MOUNT_ROWS }, (_, i) => i)))
+  }, [items])
+
+  // Observe every row div; mount it when it scrolls within 600px of viewport
+  const rowRefs = useRef<(HTMLDivElement | null)[]>([])
+  useEffect(() => {
+    if (rows.length === 0) return
+    const io = new IntersectionObserver(
+      (entries) => {
+        const toAdd: number[] = []
+        for (const entry of entries) {
+          if (entry.isIntersecting) {
+            const idx = Number((entry.target as HTMLElement).dataset.rowIdx)
+            if (!Number.isNaN(idx)) toAdd.push(idx)
+          }
+        }
+        if (toAdd.length > 0) {
+          setMountedRows(prev => {
+            const next = new Set(prev)
+            toAdd.forEach(i => next.add(i))
+            return next
+          })
+        }
+      },
+      { rootMargin: '600px 0px', threshold: 0 }
+    )
+    rowRefs.current.forEach(el => el && io.observe(el))
+    return () => io.disconnect()
+  }, [rows.length])
 
   return (
     <div ref={ref} className="jg">
-      {/* no top spacer when not virtualizing */}
-      {rows.slice(startIndex, endIndex).map((row, ri) => (
-        <div key={startIndex + ri} className="jg-row" style={{ display: 'flex', gap: `${gap}px`, marginBottom: `${gap}px`, contentVisibility: 'auto', containIntrinsicSize: `${Math.round(row.height)}px` as any }}>
-          {row.items.map(({ item, width: w, height: h, globalIndex }) => {
-            // Use thumbnail if available, fallback to original
-            const thumb = findThumbnail(item.src, thumbsByOriginal)
-            const displaySrc = thumb || item.src
-
-            // Get srcSet for responsive images
-            const filename = item.src.split('/').pop() || ''
-            const srcSetKey = `/assets/${filename}__srcset`
-            const srcSet = thumbsByOriginal[srcSetKey]
-
-            const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
-            const isPriorityRow = (startIndex + ri) < Math.max(0, eagerRowCount || 0)
-            const loading = isPriorityRow ? 'eager' : 'lazy'
-            const fetchPriority = isPriorityRow ? 'high' : 'low'
-            return (
-              <button
-                key={item.src}
-                className="jg-item"
-                onClick={() => onOpen(globalIndex)}
-                aria-label={`Open ${item.alt}`}
-                style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
-              >
-                <div className="jg-img" style={{ width: '100%', height: '100%' }}>
-                  <div className="jg-shimmer" aria-hidden="true" />
-                  <img
-                    loading={loading as any}
-                    decoding="async"
-                    fetchPriority={fetchPriority as any}
-                    src={displaySrc}
-                    srcSet={srcSet}
-                    sizes={sizes}
-                    alt={item.alt}
-                    width={w}
-                    height={h}
-                    onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                    onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                    style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }}
-                  />
-                </div>
-              </button>
-            )
-          })}
-        </div>
-      ))}
-      {/* no bottom spacer when not virtualizing */}
+      {rows.map((row, ri) => {
+        const isMounted = mountedRows.has(ri)
+        const rowHeight = Math.round(row.height)
+        return (
+          <div
+            key={ri}
+            ref={el => { rowRefs.current[ri] = el }}
+            data-row-idx={String(ri)}
+            className="jg-row"
+            style={{
+              display: 'flex',
+              gap: `${gap}px`,
+              marginBottom: `${gap}px`,
+              // Placeholder rows use a fixed height so the page doesn't jump
+              // when real content mounts. Mounted rows let flex size naturally.
+              ...(isMounted ? {} : { height: `${rowHeight}px`, flexWrap: 'wrap' }),
+            }}
+          >
+            {isMounted && row.items.map(({ item, width: w, height: h, globalIndex }) => {
+              const thumb = findThumbnail(item.src, thumbsByOriginal)
+              const displaySrc = thumb || item.src
+              const filename = item.src.split('/').pop() || ''
+              const srcSetKey = `/assets/${filename}__srcset`
+              const srcSet = thumbsByOriginal[srcSetKey]
+              const sizes = "(max-width: 640px) 90vw, (max-width: 1024px) 45vw, 33vw"
+              const isPriorityRow = ri < Math.max(0, eagerRowCount || 0)
+              const loading = isPriorityRow ? 'eager' : 'lazy'
+              const fetchPriority = isPriorityRow ? 'high' : 'low'
+              return (
+                <button
+                  key={item.src}
+                  className="jg-item"
+                  onClick={() => onOpen(globalIndex)}
+                  aria-label={`Open ${item.alt}`}
+                  style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
+                >
+                  <div className="jg-img" style={{ width: '100%', height: '100%' }}>
+                    <div className="jg-shimmer" aria-hidden="true" />
+                    <img
+                      loading={loading as any}
+                      decoding="async"
+                      fetchPriority={fetchPriority as any}
+                      src={displaySrc}
+                      srcSet={srcSet}
+                      sizes={sizes}
+                      alt={item.alt}
+                      width={w}
+                      height={h}
+                      onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+                      onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
+                      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }}
+                    />
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+        )
+      })}
     </div>
   )
 }
 
-// lowerBound was used for virtualization; removed when rendering all rows
+
+
 
 function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null, setExif: (v: any) => void }) {
   useEffect(() => {
