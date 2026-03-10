@@ -27,6 +27,8 @@ export function Lightbox({
     // Use the watermarked original if it was built
     const manifestKey = current.originalPath.replace(/^\.\//, '/src/') + '__original'
     const watermarkedSrc = thumbsManifest[manifestKey]
+
+    // Fall back to original raw image if watermark wasn't built yet
     const fullSrc = watermarkedSrc || current.src
 
     console.log('[DEBUG Lightbox]', {

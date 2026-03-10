@@ -424,9 +424,11 @@ a {
 }
 
 .lightbox-image {
-  max-width: 90vw;
-  max-height: 82vh;
-  border-radius: var(--radius);
+  width: 100vw;
+  height: 100vh;
+  object-fit: contain;
+  image-rendering: high-quality;
+  /* border-radius removed so it looks cleaner when full screen */
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.8);
 }
 
@@ -469,6 +471,7 @@ a {
   cursor: pointer;
   font-size: 1.1rem;
   transition: background 0.2s, color 0.2s;
+  z-index: 105;
 }
 
 .lightbox-close {
@@ -480,14 +483,12 @@ a {
   left: 16px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 100;
 }
 
 .lightbox-next {
   right: 16px;
   top: 50%;
   transform: translateY(-50%);
-  z-index: 100;
 }
 
 .lightbox-close:hover,
