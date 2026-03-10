@@ -16,5 +16,5 @@ export const watermarkConfig = {
     // "originals" = only apply to the big images shown in lightbox
     // "thumbnails" = only apply to the small grid images
     // "both" = apply everywhere
-    applyTo: "both",
+    applyTo: "originals",
 }

@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { ImageItem } from '../lib/gallery'
 import { ExifPanel } from './ExifPanel'
+import { TransformWrapper, TransformComponent } from 'react-zoom-pan-pinch'
 
 export function Lightbox({
     index,
@@ -64,16 +65,26 @@ export function Lightbox({
             <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); onPrev() }}>‹</button>
             <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
                 <div className="jg-shimmer" aria-hidden="true" />
-                <img
-                    key={fullSrc}
-                    className="lightbox-image"
-                    src={fullSrc}
-                    alt={current.alt}
-                    decoding="async"
-                    fetchPriority="high"
-                    onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                    onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                />
+                <TransformWrapper
+                    initialScale={1}
+                    minScale={0.5}
+                    maxScale={5}
+                    centerOnInit={true}
+                    wheel={{ step: 0.1 }}
+                >
+                    <TransformComponent wrapperStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                        <img
+                            key={fullSrc}
+                            className="lightbox-image"
+                            src={fullSrc}
+                            alt={current.alt}
+                            decoding="async"
+                            fetchPriority="high"
+                            onLoad={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
+                            onError={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
+                        />
+                    </TransformComponent>
+                </TransformWrapper>
             </div>
             <ExifPanel
                 key={current.src}
