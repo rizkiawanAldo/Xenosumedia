@@ -64,8 +64,10 @@ export function Lightbox({
     return (
         <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
             <button className="lightbox-close" aria-label="Close" onClick={onClose}>×</button>
-            <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); onPrev() }}>‹</button>
-            <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); onNext() }}>›</button>
+
+            {/* left/right invisible click zones like IG stories */}
+            <div className="lightbox-nav-zone prev-zone" onClick={(e) => { e.stopPropagation(); onPrev() }} />
+            <div className="lightbox-nav-zone next-zone" onClick={(e) => { e.stopPropagation(); onNext() }} />
 
             <TransformWrapper
                 initialScale={1}
@@ -73,25 +75,53 @@ export function Lightbox({
                 maxScale={5}
                 centerOnInit={true}
                 wheel={{ step: 0.1 }}
+                panning={{ velocityDisabled: true }} // Disabling momentum to make click vs pan easier to distinguish
             >
-                <TransformComponent
-                    wrapperStyle={{ width: "100vw", height: "100vh" }}
-                    contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
-                >
-                    <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-                        <div className="jg-shimmer" aria-hidden="true" />
-                        <img
-                            key={fullSrc}
-                            className="lightbox-image"
-                            src={fullSrc}
-                            alt={current.alt}
-                            decoding="async"
-                            fetchPriority="high"
-                            onLoad={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
-                            onError={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
-                        />
-                    </div>
-                </TransformComponent>
+                {({ instance }) => (
+                    <TransformComponent
+                        wrapperStyle={{ width: "100vw", height: "100vh" }}
+                        contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
+                    >
+                        <div
+                            className="lightbox-img-wrap"
+                            style={{ width: "100vw", height: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}
+                            onClick={(e) => {
+                                // If zoomed out completely, clicking anywhere not on the image itself closes it
+                                // Make sure we only close if we click on the wrapper directly, not its children
+                                if (e.target === e.currentTarget && instance.transformState.scale === 1) {
+                                    onClose();
+                                }
+                            }}
+                        >
+                            <div className="jg-shimmer" aria-hidden="true">
+                                <span className="lightbox-loader"></span>
+                            </div>
+                            <img
+                                key={fullSrc}
+                                className="lightbox-image"
+                                src={fullSrc}
+                                alt={current.alt}
+                                decoding="async"
+                                fetchPriority="high"
+                                onLoad={(e) => {
+                                    // adding 'loaded' to the wrap
+                                    const wrap = e.currentTarget.closest('.lightbox-img-wrap');
+                                    wrap?.classList.add('loaded');
+                                    // and also trigger the flash on the nav zones by adding a brief class to lightbox root
+                                    const root = e.currentTarget.closest('.lightbox') as HTMLElement | null;
+                                    root?.classList.remove('flash-nav');
+                                    // force reflow
+                                    void root?.offsetWidth;
+                                    root?.classList.add('flash-nav');
+                                }}
+                                onError={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
+                                // Stop propagation entirely from the image
+                                onClick={(e) => e.stopPropagation()}
+                                onPointerDown={(e) => e.stopPropagation()}
+                            />
+                        </div>
+                    </TransformComponent>
+                )}
             </TransformWrapper>
 
             <ExifPanel

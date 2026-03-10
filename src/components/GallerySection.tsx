@@ -166,6 +166,7 @@ function JustifiedGallery({
                                     <button
                                         key={item.src}
                                         className="jg-item"
+                                        data-index={globalIndex}
                                         onClick={() => onOpen(globalIndex)}
                                         aria-label={`Open ${item.alt}`}
                                         style={{
@@ -232,6 +233,7 @@ function GridGallery({
                     <button
                         key={item.src}
                         className="grid-item"
+                        data-index={item.originalIndex}
                         onClick={() => onOpen(item.originalIndex)}
                         aria-label={`Open ${item.alt}`}
                     >

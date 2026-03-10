@@ -69,28 +69,22 @@ function App() {
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [exif, setExif] = useState<{ fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null>(null)
 
-  const previousUrlRef = useRef<string | null>(null)
   const savedScrollRef = useRef<number>(0)
 
   const openLightbox = (index: number) => {
     savedScrollRef.current = window.scrollY
-    previousUrlRef.current = window.location.href
-    const newHash = `#lb=${index}`
-    if (window.location.hash !== newHash) {
-      window.history.pushState({ lb: index }, '', newHash)
-    } else {
-      window.history.pushState({ lb: index, dup: Date.now() }, '')
-    }
     setLightboxIndex(index)
   }
 
   const closeLightbox = () => {
-    if (typeof window !== 'undefined' && window.location.hash.startsWith('#lb=')) {
-      const prev = previousUrlRef.current
-      if (prev) {
-        window.history.replaceState(null, '', prev)
-      } else {
-        window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    if (lightboxIndex !== null) {
+      // Find the image element in the DOM by its data-index and scroll it into view
+      const activeEl = document.querySelector(`[data-index="${lightboxIndex}"]`)
+      if (activeEl) {
+        // Scroll slightly above center so the header doesn't block it
+        const yOffset = -100;
+        const y = activeEl.getBoundingClientRect().top + window.scrollY + yOffset;
+        window.scrollTo({ top: y, behavior: 'instant' });
       }
     }
     setLightboxIndex(null)
@@ -106,30 +100,11 @@ function App() {
         if (typeof y === 'number') {
           setTimeout(() => window.scrollTo({ top: y, behavior: 'instant' as any }), 0)
         }
-      } else {
-        const m = /^#lb=(\d+)$/.exec(window.location.hash)
-        if (m) {
-          const idx = parseInt(m[1], 10)
-          if (!Number.isNaN(idx)) {
-            setLightboxIndex(idx)
-          }
-        }
       }
     }
     window.addEventListener('popstate', onPopState)
     return () => window.removeEventListener('popstate', onPopState)
   }, [lightboxIndex])
-
-  useEffect(() => {
-    const m = /^#lb=(\d+)$/.exec(window.location.hash)
-    if (m) {
-      const idx = parseInt(m[1], 10)
-      if (!Number.isNaN(idx)) {
-        previousUrlRef.current = window.location.href
-        setLightboxIndex(idx)
-      }
-    }
-  }, [])
 
   const showPrev = () => setLightboxIndex((idx) => {
     if (idx === null) return null
