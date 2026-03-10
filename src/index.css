@@ -318,6 +318,45 @@ a {
   }
 }
 
+/* ─── Grid gallery ──────────────────────────────────────── */
+.gallery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 16px;
+  width: 100%;
+}
+
+.grid-item {
+  position: relative;
+  aspect-ratio: 1;
+  /* Square grid */
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  will-change: transform;
+  transition: opacity 0.2s;
+}
+
+.grid-item .jg-img {
+  width: 100%;
+  height: 100%;
+}
+
+.grid-item img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: var(--radius);
+  transition: transform 0.35s ease, filter 0.35s ease;
+}
+
+.grid-item:hover img {
+  transform: scale(1.03);
+  filter: brightness(1.1);
+}
+
 /* ─── Pricing ─────────────────────────────────────────── */
 .pricing {
   padding: 48px 0 32px;

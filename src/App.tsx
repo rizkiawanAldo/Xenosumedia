@@ -1,477 +1,62 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
-import type { MutableRefObject } from 'react'
+import { SiteHeader } from './components/SiteHeader'
+import { HeroSection } from './components/HeroSection'
+import { GallerySection } from './components/GallerySection'
+import { InfoGrid } from './components/InfoGrid'
+import { SiteFooter } from './components/SiteFooter'
+import { Lightbox } from './components/Lightbox'
+import { siteConfig } from './site.config'
+import type { ImageItem } from './lib/gallery'
+
+// import manifest data
 import thumbsManifestData from './generated/manifest.json'
-
-type CategoryKey = string
-
-type ImageItem = {
-  src: string
-  alt: string
-  category: CategoryKey
-}
-
-type JustifiedItem = ImageItem & {
-  aspectRatio: number
-}
-
-type JustifiedRow = {
-  items: { item: JustifiedItem, width: number, height: number, globalIndex: number }[]
-  height: number
-}
-
-function getFilenameSeed(s: string): number {
-  const name = s.split('?')[0].split('#')[0].split('/').pop() || s
-  let h = 2166136261 >>> 0 // FNV-1a basis
-  for (let i = 0; i < name.length; i++) {
-    h ^= name.charCodeAt(i)
-    h = Math.imul(h, 16777619)
-    h >>>= 0
-  }
-  // map to [0,1)
-  return (h % 100000) / 100000
-}
-
-function useContainerWidth<T extends HTMLElement>(): [MutableRefObject<T | null>, number] {
-  const ref = useRef<T | null>(null)
-  const [width, setWidth] = useState(0)
-  useEffect(() => {
-    if (!ref.current) return
-    const el = ref.current
-    const ro = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        const cr = entry.contentRect
-        setWidth(Math.floor(cr.width))
-      }
-    })
-    ro.observe(el)
-    setWidth(Math.floor(el.getBoundingClientRect().width))
-    return () => ro.disconnect()
-  }, [])
-  return [ref, width]
-}
-
-
-function computeRows(
-  items: JustifiedItem[],
-  containerWidth: number,
-  gap: number,
-  baseRowHeight: number
-): JustifiedRow[] {
-  const rows: JustifiedRow[] = []
-  if (containerWidth <= 0 || items.length === 0) return rows
-
-  let currentRow: JustifiedItem[] = []
-  let currentWidthAtBase = 0 // sum of (aspect * baseRowHeight) + gaps
-  let rowIndex = 0
-
-  const pushRow = (rowItems: JustifiedItem[]) => {
-    if (rowItems.length === 0) return
-    // subtle, stable jitter per row based on first item's seed
-    const seed = getFilenameSeed(rowItems[0].src)
-    const jitter = 1 + (seed - 0.5) * 0.12 // ±6%
-    const targetRowHeight = baseRowHeight * jitter
-
-    const totalAspect = rowItems.reduce((sum, it) => sum + it.aspectRatio, 0)
-    const totalGap = gap * (rowItems.length - 1)
-    const height = (containerWidth - totalGap) / totalAspect
-    const finalHeight = Math.max(80, Math.min(targetRowHeight, height * 1.2))
-
-    const itemsWithSizes = rowItems.map((it) => {
-      const width = it.aspectRatio * finalHeight
-      return { item: it, width, height: finalHeight, globalIndex: (it as any).__globalIndex as number }
-    })
-    rows.push({ items: itemsWithSizes, height: finalHeight })
-    rowIndex++
-  }
-
-  for (const it of items) {
-    const tentativeWidth = it.aspectRatio * baseRowHeight
-    const gaps = gap * (currentRow.length)
-    if (currentRow.length > 0 && currentWidthAtBase + tentativeWidth + gaps > containerWidth * 1.15) {
-      pushRow(currentRow)
-      currentRow = []
-      currentWidthAtBase = 0
-    }
-    currentRow.push(it)
-    currentWidthAtBase += tentativeWidth
-  }
-  if (currentRow.length) pushRow(currentRow)
-  return rows
-}
-
-// How many rows to always keep mounted regardless of scroll position (for LCP)
-const ALWAYS_MOUNT_ROWS = 3
-
-function JustifiedGallery({ items, onOpen, thumbsByOriginal, eagerRowCount }: { items: ImageItem[], onOpen: (globalIndex: number) => void, thumbsByOriginal: Record<string, string>, eagerRowCount: number }) {
-  const gap = 14
-  const [ref, width] = useContainerWidth<HTMLDivElement>()
-  const [withRatios, setWithRatios] = useState<JustifiedItem[]>([])
-
-  useEffect(() => {
-    // --- Fast path: use aspect ratios baked into the manifest at build time ---
-    // This avoids firing any extra network requests just to measure image dimensions.
-    const itemsWithBakedRatios: JustifiedItem[] = items.map((it, i) => {
-      const filename = it.src.split('/').pop() || ''
-      const arKey = `/assets/${filename}__ar`
-      const bakedAr = thumbsByOriginal[arKey]
-      const aspectRatio = bakedAr ? Math.max(0.3, Math.min(3.5, Number(bakedAr))) : 1.5
-      const e = { ...it, aspectRatio } as JustifiedItem & { __globalIndex?: number }
-        ; (e as any).__globalIndex = i
-      return e
-    })
-
-    setWithRatios(itemsWithBakedRatios)
-
-    // --- Fallback: async-probe any images that are missing a baked ratio ---
-    // In practice this should be empty after running build-images.
-    const missing = itemsWithBakedRatios
-      .map((it, i) => ({ it, i }))
-      .filter(({ it }) => (it as any).__globalIndex !== undefined && it.aspectRatio === 1.5 && !thumbsByOriginal[`/assets/${it.src.split('/').pop()}__ar`])
-
-    if (missing.length === 0) return
-
-    let cancelled = false
-      ; (async () => {
-        const enriched = [...itemsWithBakedRatios]
-        await Promise.all(
-          missing.map(async ({ it, i }) => {
-            try {
-              const thumb = findThumbnail(it.src, thumbsByOriginal)
-              const ratio = await loadImageAspect(thumb || it.src)
-              const aspectRatio = Math.max(0.3, Math.min(3.5, ratio))
-              enriched[i] = { ...it, aspectRatio } as JustifiedItem
-                ; (enriched[i] as any).__globalIndex = i
-            } catch { /* keep default */ }
-          })
-        )
-        if (!cancelled) setWithRatios(enriched)
-      })()
-
-    return () => { cancelled = true }
-  }, [items, thumbsByOriginal])
-
-  const baseRowHeight = width >= 1024 ? 260 : width >= 640 ? 220 : 200
-  const rows = useMemo(() => computeRows(withRatios, width, gap, baseRowHeight), [withRatios, width, gap, baseRowHeight])
-
-  // ── Row virtualization ────────────────────────────────────────────────────
-  // Progressive mounting: start with the first N rows, mount more as the user
-  // scrolls. Once a row is mounted it stays mounted (no teardown flicker).
-  const [mountedRows, setMountedRows] = useState<Set<number>>(
-    () => new Set(Array.from({ length: ALWAYS_MOUNT_ROWS }, (_, i) => i))
-  )
-
-  // Reset when the item list changes (e.g., new photos added)
-  useEffect(() => {
-    setMountedRows(new Set(Array.from({ length: ALWAYS_MOUNT_ROWS }, (_, i) => i)))
-  }, [items])
-
-  // Observe every row div; mount it when it scrolls within 600px of viewport
-  const rowRefs = useRef<(HTMLDivElement | null)[]>([])
-  useEffect(() => {
-    if (rows.length === 0) return
-    const io = new IntersectionObserver(
-      (entries) => {
-        const toAdd: number[] = []
-        for (const entry of entries) {
-          if (entry.isIntersecting) {
-            const idx = Number((entry.target as HTMLElement).dataset.rowIdx)
-            if (!Number.isNaN(idx)) toAdd.push(idx)
-          }
-        }
-        if (toAdd.length > 0) {
-          setMountedRows(prev => {
-            const next = new Set(prev)
-            toAdd.forEach(i => next.add(i))
-            return next
-          })
-        }
-      },
-      { rootMargin: '600px 0px', threshold: 0 }
-    )
-    rowRefs.current.forEach(el => el && io.observe(el))
-    return () => io.disconnect()
-  }, [rows.length])
-
-  // After the initial paint settles, mount ALL remaining rows during idle time.
-  // This ensures fast-scrollers (who scroll within ~1s of landing) never hit
-  // empty placeholder rows — everything is ready before they get there.
-  useEffect(() => {
-    if (rows.length === 0) return
-    const mountAll = () => {
-      setMountedRows(prev => {
-        if (prev.size >= rows.length) return prev // already complete
-        const next = new Set(prev)
-        for (let i = 0; i < rows.length; i++) next.add(i)
-        return next
-      })
-    }
-    // requestIdleCallback fires after first paint when the browser is free;
-    // fallback to setTimeout for browsers that don't support it (Safari <16).
-    const ric = typeof requestIdleCallback !== 'undefined'
-      ? requestIdleCallback(mountAll, { timeout: 1500 })
-      : setTimeout(mountAll, 800) as unknown as number
-    return () => {
-      if (typeof cancelIdleCallback !== 'undefined') cancelIdleCallback(ric)
-      else clearTimeout(ric)
-    }
-  }, [rows.length])
-
-  return (
-    <div ref={ref} className="jg">
-      {rows.map((row, ri) => {
-        const isMounted = mountedRows.has(ri)
-        const rowHeight = Math.round(row.height)
-        return (
-          <div
-            key={ri}
-            ref={el => { rowRefs.current[ri] = el }}
-            data-row-idx={String(ri)}
-            className="jg-row"
-            style={{
-              display: 'flex',
-              gap: `${gap}px`,
-              marginBottom: `${gap}px`,
-              // Placeholder rows use a fixed height so the page doesn't jump
-              // when real content mounts. Mounted rows let flex size naturally.
-              ...(isMounted ? {} : { height: `${rowHeight}px`, flexWrap: 'wrap' }),
-            }}
-          >
-            {isMounted && row.items.map(({ item, width: w, height: h, globalIndex }) => {
-              // Use 800w thumbnail in the grid — good quality WebP, still much smaller than originals
-              const displaySrc = findThumbnail(item.src, thumbsByOriginal) || item.src
-              const isPriorityRow = ri < Math.max(0, eagerRowCount || 0)
-              const loading = isPriorityRow ? 'eager' : 'lazy'
-              const fetchPriority = isPriorityRow ? 'high' : 'low'
-              return (
-                <button
-                  key={item.src}
-                  className="jg-item"
-                  onClick={() => onOpen(globalIndex)}
-                  aria-label={`Open ${item.alt}`}
-                  style={{ width: `${w}px`, height: `${h}px`, padding: 0, border: 0, background: 'transparent', cursor: 'zoom-in' }}
-                >
-                  <div className="jg-img" style={{ width: '100%', height: '100%' }}>
-                    <div className="jg-shimmer" aria-hidden="true" />
-                    <img
-                      loading={loading as any}
-                      decoding="async"
-                      fetchPriority={fetchPriority as any}
-                      src={displaySrc}
-                      alt={item.alt}
-                      width={w}
-                      height={h}
-                      onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                      onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-                      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 'var(--radius)', display: 'block' }}
-                    />
-                  </div>
-                </button>
-              )
-            })}
-          </div>
-        )
-      })}
-    </div>
-  )
-}
-
-
-
-
-function ExifPanel({ src, exif, setExif }: { src: string, exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null, setExif: (v: any) => void }) {
-  useEffect(() => {
-    let cancelled = false
-    if (!src) return
-      ; (async () => {
-        try {
-          const { parse } = await import('exifr')
-          const data = await parse(src, {
-            pick: [
-              'FNumber', 'ExposureTime', 'ISO', 'FocalLength'
-            ]
-          }) as any
-          if (cancelled) return
-          setExif({
-            fNumber: data?.FNumber,
-            exposureTime: data?.ExposureTime,
-            ISO: data?.ISO,
-            focalLength: data?.FocalLength
-          })
-        } catch {
-          if (!cancelled) setExif(null)
-        }
-      })()
-    return () => { cancelled = true }
-  }, [src])
-
-  if (!exif) return null
-
-  const fmtAperture = exif.fNumber ? `f/${exif.fNumber.toFixed(1)}` : '—'
-  const fmtExposure = typeof exif.exposureTime === 'number'
-    ? (exif.exposureTime >= 1 ? `${exif.exposureTime.toFixed(0)} sec` : `1/${Math.round(1 / exif.exposureTime)} sec`)
-    : '—'
-  const fmtISO = exif.ISO ? `ISO ${exif.ISO}` : '—'
-  const fmtFocal = exif.focalLength ? `${Math.round(exif.focalLength)} mm` : '—'
-
-  return (
-    <div className="exif-panel" onClick={(e) => e.stopPropagation()}>
-      <div className="exif-item">{fmtAperture}</div>
-      <div className="exif-sep">•</div>
-      <div className="exif-item">{fmtExposure}</div>
-      <div className="exif-sep">•</div>
-      <div className="exif-item">{fmtISO}</div>
-      <div className="exif-sep">•</div>
-      <div className="exif-item">{fmtFocal}</div>
-    </div>
-  )
-}
-
-
-// Vite appends a content hash to asset filenames in production builds
-// e.g. "photo-CvlBJBQ9.jpg" → "photo.jpg"
-// The manifest uses the original unhashed names, so we must strip the hash first.
-function stripViteHash(filename: string): string {
-  return filename.replace(/-[A-Za-z0-9_]{8}(\.[^.]+)$/, '$1')
-}
-
-// Simple thumbnail lookup function
-function findThumbnail(src: string, thumbsManifest: Record<string, string>): string | undefined {
-  const filename = stripViteHash(src.split('/').pop() || '')
-  const manifestKey = `/assets/${filename}`
-  return thumbsManifest[manifestKey]
-}
-
-
-// Load image aspect ratio efficiently
-function loadImageAspect(src: string): Promise<number> {
-  return new Promise((resolve) => {
-    const img = new Image()
-    img.onload = () => {
-      if (img.naturalHeight === 0) {
-        resolve(1)
-        return
-      }
-      resolve(img.naturalWidth / img.naturalHeight)
-    }
-    img.onerror = () => resolve(1)
-    img.decoding = 'async'
-    img.fetchPriority = 'low' as any
-    img.src = src
-  })
-}
-
-function LightboxView({
-  index, images, exif, setExif, onClose, onPrev, onNext
-}: {
-  index: number
-  images: ImageItem[]
-  exif: { fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null
-  setExif: (v: any) => void
-  onClose: () => void
-  onPrev: () => void
-  onNext: () => void
-}) {
-  const current = images[index]
-  // Use the original full-resolution image in the lightbox for maximum quality
-  const fullSrc = current.src
-
-  // Preload adjacent original images so swiping feels instant
-  useEffect(() => {
-    const n = images.length
-    const adjacentSrcs = [
-      images[(index + 1) % n].src,
-      images[(index + n - 1) % n].src,
-    ]
-    const imgs = adjacentSrcs.map(s => {
-      const img = new Image()
-      img.fetchPriority = 'low'
-      img.decoding = 'async'
-      img.src = s
-      return img
-    })
-    return () => { imgs.forEach(img => { img.src = '' }) }
-  }, [index, images])
-
-  return (
-    <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
-      <button className="lightbox-close" aria-label="Close" onClick={onClose}>×</button>
-      <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); onPrev() }}>‹</button>
-      <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-        <div className="jg-shimmer" aria-hidden="true" />
-        <img
-          key={fullSrc}
-          className="lightbox-image"
-          src={fullSrc}
-          alt={current.alt}
-          decoding="async"
-          fetchPriority="high"
-          onLoad={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-          onError={(e) => (e.currentTarget.parentElement as HTMLElement)?.classList.add('loaded')}
-        />
-      </div>
-      <ExifPanel
-        key={current.src}
-        src={current.src}
-        exif={exif}
-        setExif={setExif}
-      />
-      <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); onNext() }}>›</button>
-    </div>
-  )
-}
 
 function App() {
   const base = import.meta.env.BASE_URL
-  // Prefix all manifest paths with the app base so they resolve correctly
-  // on subdirectory deploys like GitHub Pages (/Xenosumedia/).
-  // Values are either a plain URL (/thumbs/x.webp), a srcset string, or a
-  // numeric aspect ratio (__ar entries). Only rewrite string URL values.
   const thumbsManifest: Record<string, string> = Object.fromEntries(
     Object.entries(thumbsManifestData as Record<string, string | number>).map(([k, v]) => [
       k,
       typeof v === 'number'
-        // Keep __ar values as plain strings (no path rewriting needed)
         ? String(v)
-        // Rewrite every absolute path (starting with /) to include the app base.
-        // Handles both plain URLs and srcset strings with multiple entries.
         : (v as string).replace(/(^|,\s*)\//g, `$1${base}`),
     ])
   )
 
-  const imagesByCategory: Record<CategoryKey, ImageItem[]> = useMemo(() => {
-    // Import all images in any subfolder under photos as URLs (Vite v7: use query/import)
+  const { imagesByCategory, allImagesWithIndex } = useMemo(() => {
     const all = import.meta.glob('./assets/photos/*/*.{jpg,jpeg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
-
     const titleCase = (s: string) => s.replace(/[-_]+/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 
-    const byCat: Record<CategoryKey, ImageItem[]> = {}
+    const byCat: Record<string, (ImageItem & { originalIndex: number })[]> = {}
+    const flatList: ImageItem[] = []
+
     Object.entries(all)
       .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))
       .forEach(([path, url]) => {
-        // path example: './assets/photos/event/20251011-XNS03439.jpg'
         const parts = path.split('/')
         const folder = parts[parts.indexOf('photos') + 1] || 'Misc'
         const category = titleCase(folder)
         const filename = parts[parts.length - 1] || ''
         const name = filename.replace(/\.[^.]+$/, '')
-        const item: ImageItem = { src: url, alt: `${category} ${name}`, category }
-        if (!byCat[category]) byCat[category] = []
-        byCat[category].push(item)
 
+        flatList.push({ src: url, alt: `${category} ${name}`, category, originalPath: path })
       })
 
-    return byCat
+    // Now assign originalIndex
+    flatList.forEach((item, index) => {
+      if (!byCat[item.category]) byCat[item.category] = []
+      byCat[item.category].push({ ...item, originalIndex: index })
+    })
+
+    return { imagesByCategory: byCat, allImagesWithIndex: flatList }
   }, [])
 
-  // Hero banner: import first image from src/assets/banner
   const bannerUrl = useMemo(() => {
     const banners = import.meta.glob('./assets/banner/*.{jpg,jpeg,png,webp}', { eager: true, query: '?url', import: 'default' }) as Record<string, string>
     const first = Object.entries(banners).sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }))[0]?.[1]
     return first || ''
   }, [])
 
-  // Get hero thumbnail for faster loading
   const heroThumbnail = useMemo(() => {
     if (!bannerUrl) return ''
     const filename = bannerUrl.split('/').pop() || ''
@@ -479,41 +64,32 @@ function App() {
     return thumbsManifest[manifestKey] || bannerUrl
   }, [bannerUrl, thumbsManifest])
 
-
-
-  const categories: CategoryKey[] = useMemo(() => Object.keys(imagesByCategory), [imagesByCategory])
-  const allImages: ImageItem[] = useMemo(() => categories.flatMap((c) => imagesByCategory[c] || []), [categories, imagesByCategory])
+  const categories = useMemo(() => Object.keys(imagesByCategory), [imagesByCategory])
 
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null)
   const [exif, setExif] = useState<{ fNumber?: number, exposureTime?: number, ISO?: number, focalLength?: number } | null>(null)
 
-  // Track URL and scroll to keep UX stable on mobile back/close
   const previousUrlRef = useRef<string | null>(null)
   const savedScrollRef = useRef<number>(0)
 
   const openLightbox = (index: number) => {
     savedScrollRef.current = window.scrollY
-    // Save previous URL including hash to restore on manual close
     previousUrlRef.current = window.location.href
-    // Push a hash identifying the lightbox so Back will close it
     const newHash = `#lb=${index}`
     if (window.location.hash !== newHash) {
       window.history.pushState({ lb: index }, '', newHash)
     } else {
-      // Ensure we still create a history entry even if same hash
       window.history.pushState({ lb: index, dup: Date.now() }, '')
     }
     setLightboxIndex(index)
   }
 
   const closeLightbox = () => {
-    // If we are currently showing a lightbox hash, restore previous URL without navigating
     if (typeof window !== 'undefined' && window.location.hash.startsWith('#lb=')) {
       const prev = previousUrlRef.current
       if (prev) {
         window.history.replaceState(null, '', prev)
       } else {
-        // If no previous captured, just remove the hash
         window.history.replaceState(null, '', window.location.pathname + window.location.search)
       }
     }
@@ -521,25 +97,20 @@ function App() {
     setExif(null)
   }
 
-  // Close lightbox on browser Back. Preserve scroll position.
   useEffect(() => {
     function onPopState() {
-      // If leaving a lightbox state, close it and restore scroll
       if (lightboxIndex !== null) {
         setLightboxIndex(null)
         setExif(null)
-        // Defer to override any hash-scroll that may occur
         const y = savedScrollRef.current
         if (typeof y === 'number') {
           setTimeout(() => window.scrollTo({ top: y, behavior: 'instant' as any }), 0)
         }
       } else {
-        // Handle deep-links like #lb=12 opened directly
         const m = /^#lb=(\d+)$/.exec(window.location.hash)
         if (m) {
           const idx = parseInt(m[1], 10)
           if (!Number.isNaN(idx)) {
-            // Don't push new state here; just set UI state
             setLightboxIndex(idx)
           }
         }
@@ -549,7 +120,6 @@ function App() {
     return () => window.removeEventListener('popstate', onPopState)
   }, [lightboxIndex])
 
-  // On initial load, open lightbox if URL contains an lb hash
   useEffect(() => {
     const m = /^#lb=(\d+)$/.exec(window.location.hash)
     if (m) {
@@ -560,25 +130,25 @@ function App() {
       }
     }
   }, [])
+
   const showPrev = () => setLightboxIndex((idx) => {
     if (idx === null) return null
     setExif(null)
-    return (idx + allImages.length - 1) % allImages.length
+    return (idx + allImagesWithIndex.length - 1) % allImagesWithIndex.length
   })
+
   const showNext = () => setLightboxIndex((idx) => {
     if (idx === null) return null
     setExif(null)
-    return (idx + 1) % allImages.length
+    return (idx + 1) % allImagesWithIndex.length
   })
 
-  // Clear EXIF whenever the displayed image changes so it refetches
   useEffect(() => {
     if (lightboxIndex !== null) {
       setExif(null)
     }
   }, [lightboxIndex])
 
-  // Scroll-triggered fade-in for .reveal elements
   useEffect(() => {
     const els = document.querySelectorAll('.reveal')
     if (!els.length) return
@@ -595,123 +165,52 @@ function App() {
     )
     els.forEach((el) => io.observe(el))
     return () => io.disconnect()
-  }, [categories]) // re-run when categories load
+  }, [categories])
+
+  // Apply theme variables from config
+  useEffect(() => {
+    Object.entries(siteConfig.theme).forEach(([key, value]) => {
+      // transform camelCase to kebab-case
+      const cssVar = `--${key.replace(/([A-Z])/g, '-$1').toLowerCase()}`
+      document.documentElement.style.setProperty(cssVar, value)
+    })
+  }, [])
 
   return (
     <div className="site">
-      <header className="site-header">
-        <div className="site-header-inner">
-          <div className="brand">
-            <a href="#hero" className="brand-logo-link" aria-label="Xenosumedia Home">
-              <img className="brand-logo" src={`${import.meta.env.BASE_URL}logo-dark.png`} alt="Xenosumedia logo" decoding="async" fetchPriority="low" />
-            </a>
-          </div>
-          <nav className="nav">
-
-            <a href="#about">About</a>
-            <a href="#contact">Contact</a>
-          </nav>
-        </div>
-      </header>
+      <SiteHeader />
 
       <main>
-        <section id="hero" className="hero">
-          <div className="hero-bg">
-            {heroThumbnail && (
-              <img
-                className="hero-img"
-                src={heroThumbnail}
-                alt=""
-                decoding="async"
-                fetchPriority="high"
-                width="1200"
-                height="450"
-                style={{ aspectRatio: '16/6' }}
-                onError={(e) => {
-                  // Fallback to original if thumbnail fails
-                  if (e.currentTarget.src !== bannerUrl) {
-                    e.currentTarget.src = bannerUrl
-                  }
-                }}
-              />
-            )}
-          </div>
-          <div className="hero-scrim" />
-          <div className="hero-content">
-            <h1 className="hero-title">Xenosumedia</h1>
-            <p className="hero-subtitle">Tell your moments, tell your story</p>
-          </div>
-        </section>
+        <HeroSection heroThumbnail={heroThumbnail} bannerUrl={bannerUrl} />
 
         {categories.map((cat, catIdx) => (
-          <section key={cat} id={cat.toLowerCase()} className="gallery-section reveal">
-            <div className="section-header">
-              <h2>{cat}</h2>
-            </div>
-            <JustifiedGallery
-              items={imagesByCategory[cat]}
-              thumbsByOriginal={thumbsManifest}
-              eagerRowCount={catIdx === 0 ? 1 : 0}
-              onOpen={(globalIndex) => {
-                const img = imagesByCategory[cat][globalIndex]
-                const idx = allImages.findIndex((g) => g === img)
-                if (idx >= 0) openLightbox(idx)
-              }}
-            />
-          </section>
+          <GallerySection
+            key={cat}
+            category={cat}
+            items={imagesByCategory[cat]}
+            thumbsByOriginal={thumbsManifest}
+            eagerRowCount={catIdx === 0 ? 1 : 0}
+            onOpen={openLightbox}
+          />
         ))}
 
-        <div className="info-grid reveal">
-          <div className="info-block" id="about">
-            <h2>About</h2>
-            <p>
-              Xenosumedia captures authentic moments across portraits, events,
-              sports, and landscapes. The goal is simple: make you feel the
-              story in every frame.
-            </p>
-            <p style={{ marginTop: '8px', fontSize: '0.85rem', color: 'var(--color-muted)' }}>
-              Available for bookings in Jakarta and surrounding areas.
-            </p>
-          </div>
-          <div className="info-block" id="contact">
-            <h2>Contact</h2>
-            <a className="contact-link" href="mailto:xenosumedia@gmail.com">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="4" width="20" height="16" rx="2" /><path d="m2 7 9.5 6.5a1 1 0 0 0 1 0L22 7" /></svg>
-              xenosumedia@gmail.com
-            </a>
-            <a className="contact-link" href="https://www.instagram.com/xenosumedia/" target="_blank" rel="noopener noreferrer">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="20" height="20" rx="5" /><circle cx="12" cy="12" r="5" /><circle cx="17.5" cy="6.5" r="1" fill="currentColor" stroke="none" /></svg>
-              @xenosumedia
-            </a>
-            <p style={{ marginTop: '20px', fontSize: '0.85rem', color: 'var(--color-muted)', lineHeight: 1.7 }}>
-              Pricing varies by shoot type and duration —
-              reach out for a custom quote.
-            </p>
-          </div>
-        </div>
+        <InfoGrid />
       </main>
 
       {lightboxIndex !== null && (
-        <LightboxView
+        <Lightbox
           index={lightboxIndex}
-          images={allImages}
+          images={allImagesWithIndex}
           exif={exif}
           setExif={setExif}
           onClose={closeLightbox}
-          onPrev={() => { showPrev() }}
-          onNext={() => { showNext() }}
+          onPrev={showPrev}
+          onNext={showNext}
+          thumbsManifest={thumbsManifest}
         />
       )}
 
-      <footer className="site-footer">
-        <small>© {new Date().getFullYear()} Xenosumedia. All rights reserved.</small>
-        <div className="footer-links">
-          <a href="#hero">Home</a>
-          <a href="#about">About</a>
-          <a href="#contact">Contact</a>
-          <a href="https://www.instagram.com/xenosumedia/" target="_blank" rel="noopener noreferrer">Instagram</a>
-        </div>
-      </footer>
+      <SiteFooter />
     </div>
   )
 }
