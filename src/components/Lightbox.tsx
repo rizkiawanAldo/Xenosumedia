@@ -63,16 +63,21 @@ export function Lightbox({
         <div className="lightbox" role="dialog" aria-modal="true" onClick={onClose}>
             <button className="lightbox-close" aria-label="Close" onClick={onClose}>×</button>
             <button className="lightbox-prev" aria-label="Previous" onClick={(e) => { e.stopPropagation(); onPrev() }}>‹</button>
-            <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
-                <div className="jg-shimmer" aria-hidden="true" />
-                <TransformWrapper
-                    initialScale={1}
-                    minScale={0.5}
-                    maxScale={5}
-                    centerOnInit={true}
-                    wheel={{ step: 0.1 }}
+            <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); onNext() }}>›</button>
+
+            <TransformWrapper
+                initialScale={1}
+                minScale={1}
+                maxScale={5}
+                centerOnInit={true}
+                wheel={{ step: 0.1 }}
+            >
+                <TransformComponent
+                    wrapperStyle={{ width: "100vw", height: "100vh" }}
+                    contentStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}
                 >
-                    <TransformComponent wrapperStyle={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                    <div className="lightbox-img-wrap" onClick={(e) => e.stopPropagation()}>
+                        <div className="jg-shimmer" aria-hidden="true" />
                         <img
                             key={fullSrc}
                             className="lightbox-image"
@@ -83,16 +88,16 @@ export function Lightbox({
                             onLoad={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
                             onError={(e) => e.currentTarget.closest('.lightbox-img-wrap')?.classList.add('loaded')}
                         />
-                    </TransformComponent>
-                </TransformWrapper>
-            </div>
+                    </div>
+                </TransformComponent>
+            </TransformWrapper>
+
             <ExifPanel
                 key={current.src}
                 src={current.src}
                 exif={exif}
                 setExif={setExif}
             />
-            <button className="lightbox-next" aria-label="Next" onClick={(e) => { e.stopPropagation(); onNext() }}>›</button>
         </div>
     )
 }

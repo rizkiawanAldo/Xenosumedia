@@ -446,6 +446,7 @@ a {
   font-size: 0.8rem;
   letter-spacing: 0.04em;
   border: 1px solid rgba(255, 255, 255, 0.1);
+  z-index: 100;
 }
 
 .exif-sep {
